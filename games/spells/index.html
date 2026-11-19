@@ -1,0 +1,917 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Spell Class</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Cinzel:wght@600;800&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; height: 100%; background: #120a24; overflow: hidden;
+    font-family: "Cinzel", Georgia, serif; color: #fff; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; }
+  video { display: none; }
+  .overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 22px; background: rgba(18, 10, 36, .86); text-align: center; }
+  .hidden { display: none !important; }
+  h1 { font-family: "Cinzel Decorative", Georgia, serif; font-size: 72px; margin: 0; color: #f7c843;
+    text-shadow: 0 0 25px #ffb30088; }
+  #end { background: rgba(18, 10, 36, .55); gap: 10px; }
+  #end h1 { font-size: 44px; }
+  #trophy { display: flex; gap: 60px; }
+  .cup { position: relative; width: 170px; filter: drop-shadow(0 0 25px #ffd700);
+    animation: shine 1.2s ease-in-out infinite alternate; }
+  .cup svg { width: 170px; display: block; }
+  .cupface { position: absolute; left: 50%; top: 65px; transform: translate(-50%, -50%); }
+  .cupface img { width: 72px !important; height: 72px !important; }
+  @keyframes shine { from { transform: rotate(-4deg) scale(1); } to { transform: rotate(4deg) scale(1.07); } }
+  .row { display: flex; gap: 14px; align-items: center; font-size: 28px; }
+  .row span { width: 220px; text-align: right; }
+  button { font: inherit; font-size: 28px; padding: 12px 28px; border-radius: 40px; border: 3px solid #fff3;
+    background: #ffffff14; color: #fff; cursor: pointer; }
+  button.on { background: #f7c843; border-color: #f7c843; color: #2a1600; font-weight: 800; }
+  #start, .again { font-size: 40px; padding: 18px 60px; background: #7f0909; border-color: #f7c843;
+    color: #f7e7b0; font-weight: 800; }
+  .help { font-size: 22px; opacity: .8; max-width: 900px; line-height: 1.5; }
+  #status { position: fixed; bottom: 20px; left: 0; right: 0; text-align: center; font-size: 26px; }
+  #result { font-size: 28px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="menu" class="overlay">
+  <h1>🔮 Spell Class 🔮</h1>
+  <div class="row"><span>Players</span>
+    <button data-players="1">1 player</button><button data-players="2">2 players</button></div>
+  <div class="row" id="lvl0"><span id="lvl0name">Left player</span>
+    <button data-side="0" data-level="easy">Easy</button><button data-side="0" data-level="hard">Hard</button></div>
+  <div class="row" id="lvl1"><span>Right player</span>
+    <button data-side="1" data-level="easy">Easy</button><button data-side="1" data-level="hard">Hard</button></div>
+  <button id="home" onclick="location.href='../../'">🏠 All games</button>
+  <button id="start">Start ▶</button>
+  <div class="help">Your right hand is your magic wand ✨ Draw the spell on the blackboard!<br>
+    Go to the ⭐ star, then follow the dots. The dots turn gold. Finish the shape = the spell fires!<br>
+    Every spell = 1 point. Hard: 8 seconds per spell, fast = up to 2 bonus points.<br>
+    Keys: Space = start, Esc = back to menu, F = full screen, M = music on/off, H = all games</div>
+</div>
+
+<div id="end" class="overlay hidden">
+  <h1 id="endTitle"></h1>
+  <div id="trophy"></div>
+  <div id="result"></div>
+  <button class="again">Play again ▶</button>
+  <button id="toMenu">Menu</button>
+</div>
+
+<div id="status"></div>
+
+<script type="module">
+import { video, startTracking, track as trackPoses } from '../../shared/tracking.js';
+import { KIDS, drawKidFace, kidImg } from '../../shared/kids.js';
+
+const $ = s => document.querySelector(s);
+const canvas = $('#c'), ctx = canvas.getContext('2d');
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+let W, H, S;
+function resize() {
+  const d = devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight; S = H / 900;
+  canvas.width = W * d; canvas.height = H * d; ctx.setTransform(d, 0, 0, d, 0, 0);
+  bgFor = -1; // background picture must be drawn again
+  zones.forEach(z => { z.board = boardOf(z.i, zones.length); if (z.shape) placeShape(z); });
+}
+addEventListener('resize', () => resize());
+
+// ---------- settings ----------
+const LEVELS = {
+  // tol = how near the wand must come to a dot (in pixels on a 900-high screen); limit = seconds per shape (0 = no limit)
+  easy: { name: 'Easy', tol: 85, limit: 0, size: 0.94 },
+  hard: { name: 'Hard', tol: 52, limit: 12, size: 0.88 },
+};
+const ROUND = +new URLSearchParams(location.search).get('t') || 35; // ?t=10 = 10 second round
+const FACES = { easy: KIDS.player1, hard: KIDS.player2 }; // Easy = player 1, Hard = player 2
+const drawFace = (f, x, y, r, ring) => drawKidFace(ctx, f, x, y, r, ring);
+const COLORS = ['#ff6b5b', '#6fb4ff'];
+const settings = { players: 2, levels: ['easy', 'hard'] };
+const SPACING = 30, LOST_TIME = 2, WAND_R = 24;
+
+function refreshMenu() {
+  document.querySelectorAll('[data-players]').forEach(b => b.classList.toggle('on', +b.dataset.players === settings.players));
+  document.querySelectorAll('[data-level]').forEach(b => b.classList.toggle('on', settings.levels[b.dataset.side] === b.dataset.level));
+  $('#lvl1').classList.toggle('hidden', settings.players === 1);
+  $('#lvl0name').textContent = settings.players === 1 ? 'Level' : 'Left player';
+  bgFor = -1;
+}
+document.querySelectorAll('[data-players]').forEach(b => b.onclick = () => { settings.players = +b.dataset.players; refreshMenu(); });
+document.querySelectorAll('[data-level]').forEach(b => b.onclick = () => { settings.levels[b.dataset.side] = b.dataset.level; refreshMenu(); });
+
+// ---------- spell shapes ----------
+// Each shape is a path in a box from -1 to 1 (y goes down). The player draws it from the first point to the last.
+const line = (...p) => () => p.map(([x, y]) => ({ x, y }));
+const curve = (n, f) => () => Array.from({ length: n + 1 }, (_, i) => f(i / n));
+const SHAPES = {
+  down:   { name: 'Lumos!',        fx: 'lumos',     path: line([0, -1], [0, 1]) },
+  across: { name: 'Lumos!',        fx: 'lumos',     path: line([-1, 0], [1, 0]) },
+  circle: { name: 'Protego!',      fx: 'shield',    path: curve(80, t => { const a = -Math.PI / 2 + t * Math.PI * 2; return { x: Math.cos(a), y: Math.sin(a) }; }) },
+  vee:    { name: 'Accio Broom!',  fx: 'broom',     path: line([-0.8, -0.9], [0, 0.9], [0.8, -0.9]) },
+  wave:   { name: 'Aguamenti!',    fx: 'splash',    path: curve(80, t => ({ x: -1 + 2 * t, y: -0.42 * Math.sin(t * Math.PI * 3) })) },
+  bolt:   { name: 'Thunder Spell!', fx: 'lightning', path: line([0.38, -1], [-0.32, 0.1], [0.32, -0.06], [-0.38, 1]) },
+  star:   { name: 'Fireworks!',    fx: 'fireworks', path: line(...[0, 1, 2, 3, 4, 5].map(k => { const a = -Math.PI / 2 + k * Math.PI * 4 / 5; return [Math.cos(a), Math.sin(a)]; })) },
+  spiral: { name: 'Twirlio!',      fx: 'whirl',     path: curve(140, t => { const r = 0.14 + 0.86 * t, a = -Math.PI / 2 + t * Math.PI * 4.25; return { x: r * Math.cos(a), y: r * Math.sin(a) }; }) },
+  snake:  { name: 'Serpensortia!', fx: 'snake',     path: () => {
+    const p = [];
+    for (let i = 0; i <= 50; i++) { const a = -Math.PI / 6 - i / 50 * (Math.PI * 4 / 3); p.push({ x: 0.5 * Math.cos(a), y: -0.5 + 0.5 * Math.sin(a) }); }
+    for (let i = 1; i <= 50; i++) { const a = -Math.PI / 2 + i / 50 * (Math.PI * 4 / 3); p.push({ x: 0.5 * Math.cos(a), y: 0.5 + 0.5 * Math.sin(a) }); }
+    return p.map(q => ({ x: q.x * 1.2, y: q.y }));
+  } },
+  heart:  { name: 'Love Charm!',   fx: 'hearts',    path: curve(120, t => { const a = t * Math.PI * 2;
+    return { x: 16 * Math.sin(a) ** 3, y: -(13 * Math.cos(a) - 5 * Math.cos(2 * a) - 2 * Math.cos(3 * a) - Math.cos(4 * a)) }; }) },
+};
+const POOLS = {
+  easy: ['down', 'across', 'circle', 'vee', 'wave'],
+  hard: ['bolt', 'star', 'spiral', 'snake', 'heart', 'bolt', 'star', 'spiral', 'snake', 'heart', 'down', 'across', 'circle', 'vee', 'wave'],
+};
+// fit a path into the -1..1 box, keeping its shape
+function normalize(p) {
+  const xs = p.map(q => q.x), ys = p.map(q => q.y);
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  const m = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) / 2;
+  return p.map(q => ({ x: (q.x - cx) / m, y: (q.y - cy) / m }));
+}
+// points at the same distance from each other along the path
+function resample(p, step) {
+  const segs = [];
+  let total = 0;
+  for (let i = 1; i < p.length; i++) { const l = dist(p[i - 1], p[i]); segs.push(l); total += l; }
+  const n = Math.max(8, Math.round(total / step)), out = [];
+  let si = 0, acc = 0;
+  for (let k = 0; k <= n; k++) {
+    const want = total * k / n;
+    while (si < segs.length - 1 && acc + segs[si] < want) acc += segs[si++];
+    const f = segs[si] ? clamp((want - acc) / segs[si]) : 0;
+    out.push({ x: p[si].x + (p[si + 1].x - p[si].x) * f, y: p[si].y + (p[si + 1].y - p[si].y) * f });
+  }
+  return out;
+}
+
+// ---------- layout: one blackboard for each player ----------
+function boardOf(i, n) {
+  const zw = W / n, x0 = i * zw;
+  const bw = n === 1 ? Math.min(W * 0.68, H * 1.3) : zw * 0.8;
+  const cx = x0 + zw / 2;
+  return { x0: cx - bw / 2, x1: cx + bw / 2, y0: H * 0.17, y1: H * 0.9, desk: H * 0.865, zx0: x0, zx1: x0 + zw };
+}
+
+// ---------- sound ----------
+let ac;
+function tone(type, f1, f2, dur, vol, delay = 0) {
+  const t = ac.currentTime + delay, o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.connect(g); g.connect(ac.destination);
+  o.frequency.setValueAtTime(f1, t); o.frequency.exponentialRampToValueAtTime(f2, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+let noiseBuf = null;
+function noise(dur, vol, freq, kind = 'lowpass', delay = 0) {
+  if (!noiseBuf) {
+    noiseBuf = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate);
+    const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  }
+  const t = ac.currentTime + delay, s = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
+  s.buffer = noiseBuf; f.type = kind; f.frequency.value = freq; s.connect(f); f.connect(g); g.connect(ac.destination);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  s.start(t); s.stop(t + dur + 0.02);
+}
+function sfx(kind, x = 0) {
+  if (!ac) return;
+  if (kind === 'tick') tone('sine', 700 + x * 900, 700 + x * 900, 0.08, 0.06);
+  if (kind === 'spell') [784, 988, 1175, 1568, 1976].forEach((f, i) => tone('sine', f, f, 0.3, 0.2, i * 0.06));
+  if (kind === 'lightning') { noise(1.2, 0.6, 500); noise(0.25, 0.4, 3000, 'highpass'); }
+  if (kind === 'shield') tone('sine', 300, 900, 0.6, 0.2);
+  if (kind === 'fireworks') for (let i = 0; i < 3; i++) { noise(0.35, 0.35, 1200, 'lowpass', i * 0.35); tone('sine', 1500, 3000, 0.2, 0.06, i * 0.35); }
+  if (kind === 'splash') noise(0.8, 0.4, 2500, 'bandpass');
+  if (kind === 'broom') noise(0.9, 0.25, 900, 'bandpass');
+  if (kind === 'snake') { noise(1.0, 0.18, 6000, 'highpass'); tone('sine', 400, 600, 0.2, 0.1, 0.3); }
+  if (kind === 'hearts') [523, 659, 784, 1047].forEach((f, i) => tone('triangle', f, f, 0.4, 0.2, i * 0.12));
+  if (kind === 'whirl') tone('sine', 200, 1600, 1.0, 0.15);
+  if (kind === 'lumos') tone('triangle', 880, 1760, 0.5, 0.2);
+  if (kind === 'fizzle') { tone('sine', 500, 120, 0.5, 0.15); noise(0.4, 0.15, 800); }
+  if (kind === 'beep') tone('square', 600, 600, 0.12, 0.15);
+  if (kind === 'go') tone('square', 900, 900, 0.3, 0.15);
+  if (kind === 'end') // trumpet fanfare
+    [[523, 0, .15], [523, .18, .15], [523, .36, .15], [698, .54, .35], [880, .92, .2], [784, 1.12, .2], [1047, 1.32, .9]]
+      .forEach(([f, d, len]) => { tone('sawtooth', f, f, len, 0.12, d); tone('triangle', f, f, len, 0.25, d); });
+}
+
+// ---------- background music (made by code: a magic waltz in E minor, 3 beats per bar) ----------
+const MELODY = [76, 79, 83,  84, 83, 79,  81, 76, 72,  75, 78, 71,
+                83, 79, 76,  79, 84, 88,  84, 81, 76,  78, 75, 71];
+const ROOTS = [40, 36, 45, 47], STEP = 60 / 150;
+let musicOn = true, musicTimer = null, musicStep = 0, nextNote = 0, musicGain = null;
+const midi = m => 440 * 2 ** ((m - 69) / 12);
+function note(freq, t, dur, type, vol) {
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.frequency.value = freq; o.connect(g); g.connect(musicGain);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function playStep(i, t) {
+  const m = MELODY[i % 24], beat = i % 3, root = ROOTS[Math.floor(i / 3) % 4];
+  note(midi(m), t, 1.0, 'sine', 0.45); note(midi(m + 12), t, 0.35, 'sine', 0.15); // bell sound
+  if (beat === 0) note(midi(root), t, STEP * 2.5, 'triangle', 0.6);
+  else note(midi(root + 12 + (beat === 1 ? 7 : 12)), t, STEP * 0.8, 'triangle', 0.25);
+}
+// Real music files from Iker (shared/music/, not in git). If a file can't play, the code waltz plays instead.
+const gameSong = new Audio('../../shared/music/game.mp3'), winnerSong = new Audio('../../shared/music/winner.mp3');
+gameSong.loop = true; gameSong.volume = 0.5; winnerSong.volume = 0.7;
+let winnerTimer = null;
+function startMusic() {
+  if (!musicOn) return;
+  stopWinnerSong();
+  gameSong.currentTime = 0;
+  gameSong.play().catch(startSynth);
+}
+function stopMusic() { gameSong.pause(); stopSynth(); }
+function playWinnerSong() {
+  if (!musicOn) return;
+  winnerTimer = setTimeout(() => { winnerSong.currentTime = 0; winnerSong.play().catch(() => {}); }, 2200); // after the trumpet
+}
+function stopWinnerSong() { clearTimeout(winnerTimer); winnerSong.pause(); }
+function startSynth() {
+  if (!ac || !musicOn || musicTimer) return;
+  musicGain = ac.createGain(); musicGain.gain.value = 0.12; musicGain.connect(ac.destination);
+  musicStep = 0; nextNote = ac.currentTime + 0.05;
+  musicTimer = setInterval(() => {
+    while (nextNote < ac.currentTime + 0.12) { playStep(musicStep++, nextNote); nextNote += STEP; }
+  }, 25);
+}
+function stopSynth() {
+  if (!musicTimer) return;
+  clearInterval(musicTimer); musicTimer = null;
+  musicGain.gain.setTargetAtTime(0, ac.currentTime, 0.1);
+}
+
+// ---------- camera + body tracking ----------
+let poses = [];
+const status = t => $('#status').textContent = t;
+const setup = () => startTracking(status);
+const track = now => { poses = trackPoses(now); };
+
+// Camera is mirrored, so x is flipped. Video is stretched to fill the screen.
+const sx = lm => (1 - lm.x) * W, sy = lm => lm.y * H;
+
+// ---------- game state ----------
+let state = 'menu', timeLeft = 0, countdown = 0, zones = [], particles = [], texts = [], mouse = null;
+
+function makeZones() {
+  zones = [];
+  for (let i = 0; i < settings.players; i++) {
+    const key = settings.levels[i];
+    zones.push({ i, key, level: LEVELS[key], face: FACES[key], score: 0, color: COLORS[i], hands: [],
+      board: boardOf(i, settings.players), wand: null, prev: null, trail: [], fx: [], shape: null, cool: 0, lastKind: null, tickT: 0 });
+  }
+  zones.forEach(newShape);
+}
+
+function newShape(z) {
+  const pool = POOLS[z.key];
+  let k;
+  do k = pool[Math.floor(Math.random() * pool.length)]; while (k === z.lastKind);
+  z.lastKind = k;
+  z.shape = { kind: k, norm: normalize(SHAPES[k].path()), age: 0, done: false, fizzled: false };
+  z.next = 0; z.lostT = 0; z.fadeAcc = 0; z.elapsed = 0; z.timing = false; z.cool = 0;
+  placeShape(z);
+}
+// put the shape on the player's blackboard, in screen pixels
+function placeShape(z) {
+  const b = z.board, sh = z.shape;
+  const top = b.y0 + 55 * S, bottom = b.desk - 22 * S;
+  const ex = Math.max(...sh.norm.map(q => Math.abs(q.x))), ey = Math.max(...sh.norm.map(q => Math.abs(q.y)));
+  const half = Math.min(((b.x1 - b.x0) / 2 - 30 * S) / ex, (bottom - top) / 2 / Math.max(ey, 0.01)) * z.level.size;
+  sh.cx = (b.x0 + b.x1) / 2; sh.cy = (top + bottom) / 2; sh.half = half;
+  const old = sh.pts ? z.next / sh.pts.length : 0;
+  sh.pts = resample(sh.norm.map(q => ({ x: sh.cx + q.x * half, y: sh.cy + q.y * half })), SPACING * S);
+  sh.glow = new Float32Array(sh.pts.length);
+  z.next = Math.round(old * sh.pts.length);
+}
+
+function assignHands() {
+  zones.forEach(z => z.hands = []);
+  for (const p of poses) {
+    const z = zones.length === 1 ? zones[0] : zones[sx(p[0]) < W / 2 ? 0 : 1];
+    for (const [wrist, finger] of [[16, 20]]) { // right hand only (16 = right wrist, 20 = right finger)
+      if ((p[wrist].visibility ?? 1) < 0.3) continue;
+      const f = (p[finger].visibility ?? 1) > 0.3 ? p[finger] : p[wrist];
+      z.hands.push({ x: sx(f), y: sy(f) });
+    }
+  }
+  if (mouse) {
+    const z = zones.length === 1 ? zones[0] : zones[mouse.x < W / 2 ? 0 : 1];
+    z.hands.push(mouse);
+  }
+}
+
+function startGame() {
+  if (!ac) ac = new AudioContext();
+  ac.resume();
+  stopMusic(); startMusic();
+  makeZones(); particles = []; texts = []; bgFor = -1;
+  $('#menu').classList.add('hidden'); $('#end').classList.add('hidden');
+  state = 'count'; countdown = 3.99; lastBeep = 4;
+}
+let lastBeep = 4;
+
+function endGame() {
+  state = 'end'; stopMusic(); sfx('end'); playWinnerSong();
+  const best = Math.max(...zones.map(z => z.score)), winners = zones.filter(z => z.score === best);
+  $('#endTitle').textContent = zones.length === 1 ? `${zones[0].face.name}, Charms Champion!`
+    : winners.length === 2 ? 'A tie! Two champions!' : `${winners[0].face.name} wins the Charms Cup!`;
+  $('#trophy').innerHTML = winners.map(z => `<div class="cup">${CUP}<div class="cupface">${faceImg(z.face, '#fff6c8')}</div></div>`).join('');
+  const lines = zones.map(z => `<span style="color:${z.color}">${faceImg(z.face, z.color)} ${z.face.name} (${z.level.name}): <b>${z.score}</b> ${z.score === 1 ? 'point' : 'points'} · ${z.spells || 0} ${z.spells === 1 ? 'spell' : 'spells'}</span>`);
+  $('#result').innerHTML = lines.join('<br>');
+  $('#end').classList.remove('hidden');
+}
+const CUP = `<svg viewBox="0 0 200 240"><defs><linearGradient id="gold" x1="0" x2="1">
+  <stop offset="0" stop-color="#8a5a00"/><stop offset=".35" stop-color="#fff1b0"/><stop offset=".6" stop-color="#f5c542"/>
+  <stop offset="1" stop-color="#8a5a00"/></linearGradient></defs>
+  <path d="M48 35 C5 35 5 105 62 112" fill="none" stroke="url(#gold)" stroke-width="12"/>
+  <path d="M152 35 C195 35 195 105 138 112" fill="none" stroke="url(#gold)" stroke-width="12"/>
+  <path d="M38 20 H162 C162 105 132 135 100 140 C68 135 38 105 38 20Z" fill="url(#gold)"/>
+  <rect x="90" y="138" width="20" height="38" fill="url(#gold)"/>
+  <path d="M62 176 H138 L150 202 H50Z" fill="url(#gold)"/>
+  <rect x="36" y="202" width="128" height="30" rx="5" fill="#7f0909" stroke="#f5c542" stroke-width="3"/>
+  <text x="100" y="223" text-anchor="middle" font-family="Cinzel, Georgia, serif" font-weight="800" font-size="17"
+    fill="#f7e7b0">⚡ CHAMPION ⚡</text></svg>`;
+const faceImg = kidImg;
+function toMenu() {
+  state = 'menu'; zones = []; stopMusic(); stopWinnerSong(); bgFor = -1;
+  $('#end').classList.add('hidden'); $('#menu').classList.remove('hidden');
+}
+
+$('#start').onclick = startGame;
+document.querySelector('.again').onclick = startGame;
+$('#toMenu').onclick = toMenu;
+addEventListener('keydown', e => {
+  if (e.code === 'Space' && state !== 'play' && state !== 'count') startGame();
+  if (e.code === 'Escape') toMenu();
+  if (e.code === 'KeyH') location.href = '../../';
+  if (e.code === 'KeyM') { musicOn = !musicOn; if (musicOn && (state === 'play' || state === 'count')) startMusic(); else { stopMusic(); stopWinnerSong(); } }
+  if (e.code === 'KeyF') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+});
+addEventListener('mousemove', e => mouse = { x: e.clientX, y: e.clientY });
+document.addEventListener('mouseleave', () => mouse = null);
+
+// ---------- tracing ----------
+function advance(z, s, tol) {
+  const pts = z.shape.pts, n = pts.length;
+  let moved = false;
+  while (z.next < n) {
+    let hit = -1;
+    const look = z.next === 0 ? 1 : 3; // the start must be touched; after that small skips are fine
+    for (let k = z.next; k < Math.min(n, z.next + look); k++)
+      if (dist(s, pts[k]) < (k === z.next ? tol : tol * 0.8)) { hit = k; break; }
+    if (hit < 0) break;
+    z.next = hit + 1; moved = true;
+  }
+  return moved;
+}
+
+function castSpell(z) {
+  const sh = z.shape, def = SHAPES[sh.kind];
+  sh.done = true; z.cool = 1.7; z.spells = (z.spells || 0) + 1;
+  let pts = 1;
+  if (z.level.limit) pts += z.elapsed < 5 ? 2 : z.elapsed < 8 ? 1 : 0; // speed bonus on Hard
+  z.score += pts;
+  sfx('spell'); sfx(def.fx);
+  z.fx.push({ kind: def.fx, t: 0, cx: sh.cx, cy: sh.cy, half: sh.half, pts: sh.pts, items: [], zone: z });
+  texts.push({ x: sh.cx, y: sh.cy - sh.half * 0.3, t: def.name, life: 1.6, col: '#fff1b0', size: 46 });
+  texts.push({ x: sh.cx, y: sh.cy + sh.half * 0.25, t: '+' + pts, life: 1.2, col: '#ffd84a', size: 70 });
+  for (let k = 0; k < 30; k++) {
+    const p = sh.pts[Math.floor(rand(0, sh.pts.length))], a = rand(0, 6.28), v = rand(60, 260) * S;
+    particles.push({ x: p.x, y: p.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0.8, col: '#ffd84a', r: rand(3, 6), g: 100 });
+  }
+}
+
+function fizzle(z) {
+  const sh = z.shape;
+  sh.fizzled = true; z.cool = 1.3; sfx('fizzle');
+  texts.push({ x: sh.cx, y: sh.cy, t: 'Fizzle! New spell…', life: 1.4, col: '#c8c8d8', size: 40 });
+  for (let k = 0; k < 24; k++) {
+    const p = sh.pts[Math.floor(rand(0, sh.pts.length))];
+    particles.push({ x: p.x, y: p.y, vx: rand(-40, 40) * S, vy: rand(-90, -30) * S, life: 1.0, col: '#9a9aae', r: rand(6, 14), g: -20 });
+  }
+}
+
+function updateZone(z, dt) {
+  // the wand = the hand nearest to the next dot, smoothed a little against camera shake
+  const sh = z.shape, target = sh ? sh.pts[Math.min(z.next, sh.pts.length - 1)] : null;
+  let h = null;
+  for (const c of z.hands) if (!h || (target && dist(c, target) < dist(h, target))) h = c;
+  z.prev = z.wand;
+  if (!h) z.wand = null;
+  else if (!z.wand || dist(z.wand, h) > 300 * S || h === mouse) z.wand = { x: h.x, y: h.y };
+  else { const k = 1 - Math.exp(-dt * 30); z.wand = { x: z.wand.x + (h.x - z.wand.x) * k, y: z.wand.y + (h.y - z.wand.y) * k }; }
+
+  const now = performance.now() / 1000;
+  if (z.wand) z.trail.push({ x: z.wand.x, y: z.wand.y, t: now });
+  else if (z.trail.length) z.trail.push(null); // break in the trail
+  while (z.trail.length && (!z.trail[0] || now - z.trail[0].t > 0.6)) z.trail.shift();
+  if (z.wand && Math.random() < 0.5)
+    particles.push({ x: z.wand.x + rand(-6, 6) * S, y: z.wand.y + rand(-6, 6) * S, vx: rand(-40, 40) * S, vy: rand(-40, 20) * S,
+      life: 0.45, col: Math.random() < 0.5 ? '#fff1b0' : z.color, r: rand(2, 4) });
+
+  for (const f of z.fx) f.t += dt;
+  z.fx = z.fx.filter(f => f.t < FX_DUR[f.kind]);
+  z.fx.forEach(updateFx);
+  if (!sh) return;
+  sh.age += dt;
+
+  if (z.cool > 0) { z.cool -= dt; if (z.cool <= 0 && state === 'play') newShape(z); }
+  else if (state === 'play') {
+    const tol = z.level.tol * S, n = sh.pts.length, before = z.next;
+    if (z.wand) { // check the whole move since the last frame, so a fast wand does not jump over dots
+      const a = z.prev && dist(z.prev, z.wand) < 300 * S ? z.prev : z.wand;
+      const steps = Math.max(1, Math.ceil(dist(a, z.wand) / (tol * 0.4)));
+      for (let s = 1; s <= steps; s++)
+        advance(z, { x: a.x + (z.wand.x - a.x) * s / steps, y: a.y + (z.wand.y - a.y) * s / steps }, tol);
+    }
+    if (z.next > before) {
+      z.lostT = 0;
+      if (before === 0) { z.timing = true; z.elapsed = 0; }
+      z.tickT -= dt;
+      if (z.tickT <= 0) { sfx('tick', z.next / n); z.tickT = 0.06; }
+      if (z.next >= n) { castSpell(z); return; }
+    } else z.tickT = 0;
+    if (z.next > 0) { // lost the path? after 2 seconds the gold dots fade back one by one (never minus points)
+      let near = false;
+      if (z.wand) for (let k = Math.max(0, z.next - 5); k <= Math.min(n - 1, z.next); k++) if (dist(z.wand, sh.pts[k]) < tol * 2.2) near = true;
+      if (near) { z.lostT = 0; z.fadeAcc = 0; }
+      else {
+        z.lostT += dt;
+        if (z.lostT > LOST_TIME) {
+          z.fadeAcc += dt;
+          while (z.fadeAcc > 0.12 && z.next > 0) { z.fadeAcc -= 0.12; z.next--; }
+          if (z.next === 0) { z.timing = false; z.elapsed = 0; z.lostT = 0; }
+        }
+      }
+    }
+    if (z.timing && z.level.limit) {
+      z.elapsed += dt;
+      if (z.elapsed > z.level.limit) fizzle(z);
+    }
+  }
+  for (let i = 0; i < sh.glow.length; i++) { // lit dots glow up fast, fade back slowly
+    const goal = i < z.next || sh.done ? 1 : 0, g = sh.glow[i];
+    sh.glow[i] = g + (goal - g) * Math.min(1, dt * (goal > g ? 14 : 4));
+  }
+}
+
+// ---------- spell effects ----------
+const FX_DUR = { lumos: 1.4, shield: 1.6, fireworks: 2.0, splash: 1.8, broom: 2.0, snake: 2.4, hearts: 2.2, whirl: 1.8, lightning: 1.2 };
+const FIRE_COLS = ['#ff5b5b', '#ffd84a', '#6fe0ff', '#b98cff', '#7dff8a', '#ff9de0'];
+function burst(x, y, n, col, speed, life = 1, g = 120) {
+  for (let k = 0; k < n; k++) {
+    const a = k / n * 6.28 + rand(-0.1, 0.1), v = speed * rand(0.6, 1) * S;
+    particles.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life, col: col || FIRE_COLS[k % 6], r: rand(2.5, 5), g });
+  }
+}
+function updateFx(f) {
+  const z = f.zone, b = z.board;
+  if (!f.started) {
+    f.started = true;
+    if (f.kind === 'splash') for (let k = 0; k < 60; k++)
+      particles.push({ x: f.cx + rand(-1, 1) * f.half, y: f.cy + f.half * 0.5, vx: rand(-120, 120) * S, vy: rand(-750, -350) * S,
+        life: 1.4, col: Math.random() < 0.5 ? '#6fc8ff' : '#d8f3ff', r: rand(3, 7), g: 900 });
+    if (f.kind === 'hearts') for (let k = 0; k < 16; k++)
+      f.items.push({ x: f.cx + rand(-1, 1) * f.half, y: f.cy + rand(0, 1) * f.half, vy: rand(90, 200) * S, s: rand(14, 30) * S,
+        p: rand(0, 6.28), col: ['#ff5c8a', '#ff8fb3', '#ff3b6b', '#ffc2d6'][k % 4] });
+  }
+  if (f.kind === 'fireworks') for (const at of [0.05, 0.4, 0.75, 1.05]) if (!f[at] && f.t >= at) {
+    f[at] = true;
+    burst(rand(b.x0 + 60 * S, b.x1 - 60 * S), rand(b.y0 + 40 * S, f.cy), 34, null, 320, 1.1, 80);
+  }
+  if (f.kind === 'broom') {
+    const pos = broomPos(f);
+    if (Math.random() < 0.8) particles.push({ x: pos.x - 70 * S, y: pos.y + rand(-8, 8) * S, vx: rand(-60, -20) * S, vy: rand(-20, 30) * S,
+      life: 0.7, col: Math.random() < 0.5 ? '#ffd84a' : '#fff6c8', r: rand(2, 5), g: 40 });
+  }
+}
+function broomPos(f) {
+  const z = f.zone, b = z.board, k = f.t / FX_DUR.broom;
+  return { x: b.x0 - 120 * S + (b.x1 - b.x0 + 240 * S) * k, y: f.cy + f.half * 0.6 - f.half * 1.3 * k + Math.sin(f.t * 9) * 10 * S };
+}
+function heartPath(x, y, s) {
+  ctx.beginPath(); ctx.moveTo(x, y + s * 0.35);
+  ctx.bezierCurveTo(x - s * 1.1, y - s * 0.4, x - s * 0.5, y - s * 1.1, x, y - s * 0.45);
+  ctx.bezierCurveTo(x + s * 0.5, y - s * 1.1, x + s * 1.1, y - s * 0.4, x, y + s * 0.35);
+  ctx.closePath();
+}
+function drawFx(f) {
+  const z = f.zone, b = z.board, t = f.t, d = FX_DUR[f.kind], fade = clamp((d - t) / 0.5);
+  ctx.save(); ctx.beginPath(); ctx.rect(b.zx0, 0, b.zx1 - b.zx0, H); ctx.clip();
+  if (f.kind === 'lumos') { // bright beam of light along the line
+    const a = clamp(1 - t / d);
+    ctx.lineCap = 'round'; ctx.strokeStyle = `rgba(255,250,200,${0.35 * a})`; ctx.lineWidth = 60 * S;
+    ctx.beginPath(); f.pts.forEach(p => ctx.lineTo(p.x, p.y)); ctx.stroke();
+    ctx.strokeStyle = `rgba(255,255,255,${a})`; ctx.lineWidth = 12 * S; ctx.stroke();
+    const tip = f.pts[f.pts.length - 1];
+    ctx.fillStyle = `rgba(255,250,210,${0.5 * a})`; ctx.beginPath(); ctx.arc(tip.x, tip.y, (40 + 60 * t) * S, 0, 7); ctx.fill();
+  }
+  if (f.kind === 'shield') { // a shining bubble
+    const r = f.half * 1.15 * (1 - (1 - clamp(t / 0.5)) ** 3);
+    ctx.globalAlpha = fade;
+    const g = ctx.createRadialGradient(f.cx, f.cy, r * 0.6, f.cx, f.cy, r);
+    g.addColorStop(0, 'rgba(120,200,255,0.05)'); g.addColorStop(1, 'rgba(150,220,255,0.45)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(f.cx, f.cy, r, 0, 7); ctx.fill();
+    ctx.strokeStyle = '#bfe8ff'; ctx.lineWidth = 6 * S; ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,.8)'; ctx.lineWidth = 8 * S; ctx.lineCap = 'round';
+    for (let k = 0; k < 3; k++) { const a = t * 2 + k * 2.1; ctx.beginPath(); ctx.arc(f.cx, f.cy, r * 0.85, a, a + 0.5); ctx.stroke(); }
+    ctx.beginPath(); ctx.arc(f.cx - r * 0.35, f.cy - r * 0.4, r * 0.12, 0, 7); ctx.fillStyle = 'rgba(255,255,255,.6)'; ctx.fill();
+  }
+  if (f.kind === 'splash') { // water rises in a wave and falls back
+    const h = Math.sin(Math.PI * clamp(t / d)) * f.half * 0.9, base = b.desk;
+    ctx.fillStyle = 'rgba(60,150,230,.55)';
+    ctx.beginPath(); ctx.moveTo(b.x0, base);
+    for (let x = b.x0; x <= b.x1 + 1; x += 16 * S) ctx.lineTo(x, base - h + Math.sin(x / (40 * S) + t * 8) * 14 * S);
+    ctx.lineTo(b.x1, base); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = 'rgba(220,245,255,.9)'; ctx.lineWidth = 5 * S; ctx.beginPath();
+    for (let x = b.x0; x <= b.x1 + 1; x += 16 * S) ctx.lineTo(x, base - h + Math.sin(x / (40 * S) + t * 8) * 14 * S);
+    ctx.stroke();
+  }
+  if (f.kind === 'broom') { // a broom flies across the board
+    const p = broomPos(f);
+    ctx.translate(p.x, p.y); ctx.rotate(-0.35); ctx.scale(S, S);
+    ctx.strokeStyle = '#8a5a2b'; ctx.lineWidth = 10; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(-60, 0); ctx.lineTo(110, 0); ctx.stroke();
+    ctx.fillStyle = '#d9a441'; ctx.beginPath(); ctx.moveTo(-55, -6); ctx.lineTo(-130, -26); ctx.lineTo(-138, 0); ctx.lineTo(-130, 26); ctx.lineTo(-55, 6); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = '#a8761f'; ctx.lineWidth = 2;
+    for (let k = -2; k <= 2; k++) { ctx.beginPath(); ctx.moveTo(-58, k * 2); ctx.lineTo(-132, k * 10); ctx.stroke(); }
+    ctx.fillStyle = '#7f0909'; ctx.fillRect(-62, -9, 10, 18);
+  }
+  if (f.kind === 'snake') { // a cute green snake slithers across
+    const k = t / d, headX = b.x0 - 80 * S + (b.x1 - b.x0 + 260 * S) * k, baseY = f.cy + f.half * 0.55;
+    const yAt = x => baseY + Math.sin(x / (45 * S) - t * 8) * 22 * S;
+    for (let i = 16; i >= 0; i--) {
+      const x = headX - i * 17 * S, r = (16 - i * 0.6) * S;
+      ctx.fillStyle = i % 2 ? '#4fbf5a' : '#69d873'; ctx.beginPath(); ctx.arc(x, yAt(x), r, 0, 7); ctx.fill();
+    }
+    const hy = yAt(headX);
+    ctx.fillStyle = '#69d873'; ctx.beginPath(); ctx.ellipse(headX + 10 * S, hy, 24 * S, 19 * S, 0, 0, 7); ctx.fill();
+    if (Math.sin(t * 14) > 0) { ctx.strokeStyle = '#ff4f7a'; ctx.lineWidth = 3 * S; ctx.beginPath(); ctx.moveTo(headX + 32 * S, hy + 4 * S); ctx.lineTo(headX + 46 * S, hy + 4 * S); ctx.lineTo(headX + 52 * S, hy); ctx.moveTo(headX + 46 * S, hy + 4 * S); ctx.lineTo(headX + 52 * S, hy + 9 * S); ctx.stroke(); }
+    for (const ey of [-7, 7]) {
+      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(headX + 16 * S, hy + ey * S - 3 * S, 6 * S, 0, 7); ctx.fill();
+      ctx.fillStyle = '#111'; ctx.beginPath(); ctx.arc(headX + 18 * S, hy + ey * S - 3 * S, 3 * S, 0, 7); ctx.fill();
+    }
+    ctx.fillStyle = 'rgba(255,120,150,.6)'; ctx.beginPath(); ctx.arc(headX + 8 * S, hy + 10 * S, 4 * S, 0, 7); ctx.fill();
+  }
+  if (f.kind === 'hearts') for (const h of f.items) {
+    ctx.globalAlpha = fade; ctx.fillStyle = h.col;
+    heartPath(h.x + Math.sin(t * 3 + h.p) * 20 * S, h.y - h.vy * t, h.s * (0.6 + 0.4 * clamp(t * 3))); ctx.fill();
+  }
+  if (f.kind === 'whirl') { // magic whirl: arms of sparkles spinning out
+    const R = f.half * 1.2 * clamp(t / 0.8);
+    ctx.globalAlpha = fade;
+    for (let arm = 0; arm < 5; arm++) for (let j = 1; j <= 14; j++) {
+      const r = j / 14 * R, a = t * 6 + arm * 1.2566 + j * 0.32;
+      ctx.fillStyle = j % 2 ? '#c89bff' : '#7fe7ff';
+      ctx.beginPath(); ctx.arc(f.cx + Math.cos(a) * r, f.cy + Math.sin(a) * r, (2 + j * 0.45) * S, 0, 7); ctx.fill();
+    }
+  }
+  if (f.kind === 'lightning') { // white flash and a jagged bolt
+    const flash = t < 0.15 ? 0.8 : t > 0.3 && t < 0.42 ? 0.5 : 0;
+    if (flash) { ctx.fillStyle = `rgba(255,255,240,${flash})`; ctx.fillRect(b.zx0, 0, b.zx1 - b.zx0, H); }
+    if (!f.bolt || t - f.boltT > 0.07) {
+      f.boltT = t; f.bolt = [];
+      let x = f.cx + rand(-1, 1) * f.half * 0.5, y = 0;
+      while (y < f.cy + f.half * 0.8) { f.bolt.push({ x, y }); y += rand(25, 55) * S; x += rand(-35, 35) * S; }
+    }
+    if (t < 0.7) {
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = 'rgba(255,240,120,.45)'; ctx.lineWidth = 22 * S;
+      ctx.beginPath(); f.bolt.forEach(p => ctx.lineTo(p.x, p.y)); ctx.stroke();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 6 * S; ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+// ---------- update ----------
+function update(dt) {
+  if (state === 'count') {
+    countdown -= dt;
+    const n = Math.ceil(countdown);
+    if (n < lastBeep) { lastBeep = n; sfx(n > 0 ? 'beep' : 'go'); }
+    if (countdown <= 0) { state = 'play'; timeLeft = ROUND; }
+  } else if (state === 'play') {
+    timeLeft -= dt;
+    if (timeLeft <= 0) { timeLeft = 0; endGame(); }
+  }
+  if (zones.length) assignHands();
+  for (const z of zones) updateZone(z, dt);
+  if (state === 'end' && Math.random() < 0.6) // golden confetti for the champion
+    particles.push({ x: rand(0, W), y: -10, vx: rand(-40, 40) * S, vy: rand(50, 150) * S, life: 3,
+      col: ['#f7c843', '#fff1b0', '#ff6b5b', '#ffffff'][Math.floor(rand(0, 4))], r: rand(3, 7), g: 20 });
+  for (const p of particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += (p.g ?? 500) * S * dt; p.life -= dt; }
+  particles = particles.filter(p => p.life > 0);
+  for (const t of texts) { t.y -= 50 * S * dt; t.life -= dt; }
+  texts = texts.filter(t => t.life > 0);
+}
+
+// ---------- background: the Charms classroom (drawn once into a picture, then reused every frame) ----------
+const bg = document.createElement('canvas'), bctx = bg.getContext('2d');
+let bgFor = -1;
+function buildBg(n) {
+  const d = devicePixelRatio || 1, c = bctx;
+  bg.width = W * d; bg.height = H * d; c.setTransform(d, 0, 0, d, 0, 0);
+  // stone wall
+  const wall = c.createLinearGradient(0, 0, 0, H);
+  wall.addColorStop(0, '#2b2140'); wall.addColorStop(1, '#3a2a2a');
+  c.fillStyle = wall; c.fillRect(0, 0, W, H);
+  c.strokeStyle = 'rgba(0,0,0,.25)'; c.lineWidth = 2;
+  const bh = 46 * S, bw = 110 * S;
+  for (let row = 0, y = 0; y < H; row++, y += bh) {
+    c.beginPath(); c.moveTo(0, y); c.lineTo(W, y); c.stroke();
+    for (let x = (row % 2) * bw / 2; x < W; x += bw) { c.beginPath(); c.moveTo(x, y); c.lineTo(x, y + bh); c.stroke(); }
+  }
+  const boards = Array.from({ length: n }, (_, i) => boardOf(i, n));
+  // tall arched windows with moonlight, in the spaces between the boards
+  const gaps = [[0, boards[0].x0]];
+  for (let i = 1; i < n; i++) gaps.push([boards[i - 1].x1, boards[i].x0]);
+  gaps.push([boards[n - 1].x1, W]);
+  gaps.forEach(([a, b], gi) => {
+    const ww = Math.min((b - a) * 0.62, 170 * S); if (ww < 30 * S) return;
+    const cx = (a + b) / 2, top = H * 0.06, bot = H * 0.7;
+    // light shaft on the wall and floor
+    c.fillStyle = 'rgba(190,210,255,.06)';
+    c.beginPath(); c.moveTo(cx - ww / 2, top + ww / 2); c.lineTo(cx + ww / 2, top + ww / 2); c.lineTo(cx + ww * 1.6, H); c.lineTo(cx + ww * 0.1, H); c.closePath(); c.fill();
+    const arch = () => { c.beginPath(); c.moveTo(cx - ww / 2, bot); c.lineTo(cx - ww / 2, top + ww / 2); c.arc(cx, top + ww / 2, ww / 2, Math.PI, 0); c.lineTo(cx + ww / 2, bot); c.closePath(); };
+    c.save(); arch(); c.clip();
+    const sky = c.createLinearGradient(0, top, 0, bot);
+    sky.addColorStop(0, '#16224a'); sky.addColorStop(1, '#2f4a80');
+    c.fillStyle = sky; c.fillRect(cx - ww, top, ww * 2, bot - top);
+    if (gi === 0 || gi === gaps.length - 1) { // the moon
+      const mx = cx + ww * 0.12, my = top + ww * 0.65, mr = ww * 0.24;
+      c.fillStyle = 'rgba(255,248,220,.18)'; c.beginPath(); c.arc(mx, my, mr * 2, 0, 7); c.fill();
+      c.fillStyle = '#fff6d8'; c.beginPath(); c.arc(mx, my, mr, 0, 7); c.fill();
+    }
+    c.fillStyle = '#fff';
+    for (let k = 0; k < 10; k++) { c.globalAlpha = rand(0.3, 0.9); c.fillRect(cx + rand(-0.5, 0.5) * ww, rand(top, bot), 2, 2); }
+    c.globalAlpha = 1; c.restore();
+    c.strokeStyle = '#1a1226'; c.lineWidth = 5 * S;
+    c.beginPath(); c.moveTo(cx, top); c.lineTo(cx, bot); c.moveTo(cx - ww / 2, (top + bot) / 2); c.lineTo(cx + ww / 2, (top + bot) / 2); c.stroke();
+    c.strokeStyle = '#5a4630'; c.lineWidth = 9 * S; arch(); c.stroke();
+  });
+  // blackboards
+  boards.forEach(b => {
+    c.fillStyle = '#5b3a1e'; c.fillRect(b.x0 - 16 * S, b.y0 - 16 * S, b.x1 - b.x0 + 32 * S, b.y1 - b.y0 + 32 * S);
+    c.strokeStyle = '#3b2410'; c.lineWidth = 3 * S; c.strokeRect(b.x0 - 16 * S, b.y0 - 16 * S, b.x1 - b.x0 + 32 * S, b.y1 - b.y0 + 32 * S);
+    const g = c.createLinearGradient(b.x0, b.y0, b.x1, b.y1);
+    g.addColorStop(0, '#22362c'); g.addColorStop(1, '#1a2a23');
+    c.fillStyle = g; c.fillRect(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0);
+    for (let k = 0; k < 7; k++) { // old chalk smudges
+      c.fillStyle = 'rgba(255,255,255,.035)';
+      c.beginPath(); c.ellipse(rand(b.x0, b.x1), rand(b.y0, b.y1), rand(40, 120) * S, rand(15, 40) * S, rand(-0.5, 0.5), 0, 7); c.fill();
+    }
+    chalkDoodles(c, b);
+  });
+  // wooden desks at the bottom
+  const top = H * 0.865;
+  const desk = c.createLinearGradient(0, top, 0, H);
+  desk.addColorStop(0, '#8a5a2e'); desk.addColorStop(0.12, '#6b4322'); desk.addColorStop(1, '#3d2410');
+  c.fillStyle = desk; c.fillRect(0, top, W, H - top);
+  c.fillStyle = '#a8743f'; c.fillRect(0, top, W, 6 * S);
+  c.strokeStyle = 'rgba(40,20,5,.35)'; c.lineWidth = 2;
+  for (let k = 0; k < 6; k++) { const y = top + (12 + k * 14) * S; c.beginPath(); c.moveTo(0, y); for (let x = 0; x <= W; x += 40) c.lineTo(x, y + Math.sin(x / 90 + k) * 3 * S); c.stroke(); }
+  for (let x = W / 6; x < W; x += W / 3) { c.fillStyle = 'rgba(0,0,0,.3)'; c.fillRect(x - 3, top + 6 * S, 6, H - top); }
+  // things on the desks: books, ink pot with a quill, candles (kept away from the timer in the middle)
+  const things = n === 1 ? [0.06, 0.16, 0.84, 0.94] : [0.04, 0.14, 0.36, 0.64, 0.86, 0.96];
+  things.forEach((fx, k) => {
+    const x = fx * W, y = top + 4 * S;
+    if (k % 3 === 0) { // books
+      [['#7f0909', 64], ['#1f4f8f', 56], ['#2e6b3a', 60]].forEach(([col, w], j) => {
+        c.fillStyle = col; c.fillRect(x - w * S / 2 + j * 4 * S, y - (j + 1) * 13 * S, w * S, 12 * S);
+        c.fillStyle = '#e8d9a8'; c.fillRect(x + w * S / 2 + j * 4 * S - 5 * S, y - (j + 1) * 13 * S + 2 * S, 4 * S, 8 * S);
+      });
+    } else if (k % 3 === 1) { // ink pot + quill
+      c.fillStyle = '#141428'; c.beginPath(); c.ellipse(x, y - 12 * S, 15 * S, 13 * S, 0, 0, 7); c.fill();
+      c.fillRect(x - 7 * S, y - 32 * S, 14 * S, 10 * S);
+      c.strokeStyle = '#f2ece0'; c.lineWidth = 3 * S; c.beginPath(); c.moveTo(x, y - 30 * S); c.quadraticCurveTo(x + 18 * S, y - 60 * S, x + 30 * S, y - 85 * S); c.stroke();
+      c.fillStyle = '#f2ece0'; c.beginPath(); c.ellipse(x + 22 * S, y - 66 * S, 6 * S, 22 * S, 0.5, 0, 7); c.fill();
+    } else { // candle
+      c.fillStyle = '#f3e9c8'; c.fillRect(x - 8 * S, y - 46 * S, 16 * S, 46 * S);
+      c.fillStyle = 'rgba(255,200,90,.18)'; c.beginPath(); c.arc(x, y - 56 * S, 34 * S, 0, 7); c.fill();
+      c.fillStyle = '#ffb030'; c.beginPath(); c.ellipse(x, y - 56 * S, 6 * S, 12 * S, 0, 0, 7); c.fill();
+      c.fillStyle = '#fff3b0'; c.beginPath(); c.ellipse(x, y - 54 * S, 3 * S, 6 * S, 0, 0, 7); c.fill();
+    }
+  });
+  bgFor = n;
+}
+// small chalk drawings in the corners of a blackboard (faint, so they don't look like the spell)
+function chalkDoodles(c, b) {
+  c.save(); c.strokeStyle = 'rgba(255,255,255,.22)'; c.fillStyle = 'rgba(255,255,255,.22)'; c.lineWidth = 2.5 * S; c.lineCap = 'round';
+  const L = b.x0 + 26 * S, R = b.x1 - 26 * S, T = b.y0 + 24 * S, B = b.desk - 20 * S;
+  c.font = `italic ${22 * S}px Georgia, serif`; c.textBaseline = 'top';
+  c.textAlign = 'left'; c.fillText('Charms', L, T);
+  c.textAlign = 'right'; c.fillText('Swish & flick!', R, T);
+  // wand with sparkles (bottom left)
+  c.beginPath(); c.moveTo(L, B); c.lineTo(L + 60 * S, B - 40 * S); c.stroke();
+  for (const [dx, dy] of [[75, -55], [88, -38], [70, -72]]) { const x = L + dx * S, y = B + dy * S; c.beginPath(); c.moveTo(x - 6 * S, y); c.lineTo(x + 6 * S, y); c.moveTo(x, y - 6 * S); c.lineTo(x, y + 6 * S); c.stroke(); }
+  // swish-and-flick arrow (bottom right)
+  c.beginPath(); c.moveTo(R - 90 * S, B - 30 * S); c.quadraticCurveTo(R - 60 * S, B, R - 35 * S, B - 25 * S); c.lineTo(R - 5 * S, B - 50 * S); c.stroke();
+  c.beginPath(); c.moveTo(R - 5 * S, B - 50 * S); c.lineTo(R - 18 * S, B - 46 * S); c.moveTo(R - 5 * S, B - 50 * S); c.lineTo(R - 8 * S, B - 37 * S); c.stroke();
+  // round glasses + scar (top, under the words)
+  const gx = L + 40 * S, gy = T + 55 * S;
+  c.beginPath(); c.arc(gx - 14 * S, gy, 11 * S, 0, 7); c.moveTo(gx + 25 * S, gy); c.arc(gx + 14 * S, gy, 11 * S, 0, 7); c.moveTo(gx - 3 * S, gy); c.lineTo(gx + 3 * S, gy); c.stroke();
+  c.beginPath(); c.moveTo(gx + 2 * S, gy - 34 * S); c.lineTo(gx - 4 * S, gy - 24 * S); c.lineTo(gx + 4 * S, gy - 24 * S); c.lineTo(gx - 2 * S, gy - 14 * S); c.stroke();
+  // little owl (top right)
+  const ox = R - 30 * S, oy = T + 62 * S;
+  c.beginPath(); c.ellipse(ox, oy, 16 * S, 21 * S, 0, 0, 7); c.stroke();
+  c.beginPath(); c.arc(ox - 6 * S, oy - 6 * S, 5 * S, 0, 7); c.moveTo(ox + 11 * S, oy - 6 * S); c.arc(ox + 6 * S, oy - 6 * S, 5 * S, 0, 7); c.stroke();
+  c.beginPath(); c.moveTo(ox - 12 * S, oy - 18 * S); c.lineTo(ox - 9 * S, oy - 26 * S); c.lineTo(ox - 4 * S, oy - 19 * S); c.moveTo(ox + 12 * S, oy - 18 * S); c.lineTo(ox + 9 * S, oy - 26 * S); c.lineTo(ox + 4 * S, oy - 19 * S); c.stroke();
+  // chalk tray with chalk pieces
+  c.restore();
+  c.fillStyle = '#4a2e16'; c.fillRect(b.x0 - 20 * S, b.desk - 10 * S, b.x1 - b.x0 + 40 * S, 10 * S);
+}
+
+// ---------- draw ----------
+function starPath(R, r) {
+  ctx.beginPath();
+  for (let k = 0; k < 10; k++) { const a = k * Math.PI / 5 - Math.PI / 2, rr = k % 2 ? r : R; ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); }
+  ctx.closePath();
+}
+function arrow(x, y, dx, dy, len, col, w) {
+  const l = Math.hypot(dx, dy) || 1; dx /= l; dy /= l;
+  const ex = x + dx * len, ey = y + dy * len, hs = w * 2.4;
+  ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = w; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(ex - dx * hs * 0.6, ey - dy * hs * 0.6); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(ex - dx * hs - dy * hs * 0.6, ey - dy * hs + dx * hs * 0.6);
+  ctx.lineTo(ex - dx * hs + dy * hs * 0.6, ey - dy * hs - dx * hs * 0.6); ctx.closePath(); ctx.fill();
+}
+function drawShape(z) {
+  const sh = z.shape, pts = sh.pts, n = pts.length, t = performance.now() / 1000, tol = z.level.tol * S;
+  let alpha = clamp(sh.age * 3);
+  if (sh.done || sh.fizzled) alpha = clamp(z.cool / 1.2);
+  if (alpha <= 0) return;
+  ctx.save(); ctx.globalAlpha = alpha;
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  // wide faint band = where the wand counts
+  ctx.strokeStyle = 'rgba(200,225,255,.07)'; ctx.lineWidth = tol * 1.4;
+  ctx.beginPath(); pts.forEach(p => ctx.lineTo(p.x, p.y)); ctx.stroke();
+  // chalk line
+  ctx.strokeStyle = sh.fizzled ? 'rgba(160,160,170,.35)' : 'rgba(220,235,255,.28)'; ctx.lineWidth = 4 * S;
+  ctx.stroke();
+  // direction arrows along the part still to do
+  for (let i = Math.max(z.next, 2); i < n - 2; i += 6) {
+    const a = pts[i], b = pts[i + 1];
+    arrow(a.x, a.y, b.x - a.x, b.y - a.y, 1, 'rgba(160,210,255,.55)', 3 * S);
+  }
+  // the dots: chalk white -> glowing gold when lit
+  for (let i = 0; i < n; i++) {
+    const g = sh.glow[i], p = pts[i];
+    if (g > 0.05) { ctx.fillStyle = `rgba(255,200,60,${0.28 * g})`; ctx.beginPath(); ctx.arc(p.x, p.y, 16 * S, 0, 7); ctx.fill(); }
+    const pulse = 0.55 + 0.45 * Math.sin(t * 5 - i * 0.35);
+    const r = (5 + 3 * g) * S;
+    ctx.fillStyle = g > 0.5 ? (sh.fizzled ? '#9a9aae' : '#ffd84a') : `rgba(225,240,255,${0.5 + 0.5 * pulse})`;
+    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fill();
+    if (g > 0.5) { ctx.fillStyle = '#fff8d8'; ctx.beginPath(); ctx.arc(p.x, p.y, r * 0.45, 0, 7); ctx.fill(); }
+  }
+  if (!sh.done && !sh.fizzled) {
+    if (z.next === 0) { // start: pulsing star + big arrow showing the way
+      const p = pts[0], q = pts[Math.min(4, n - 1)], s = 1 + 0.18 * Math.sin(t * 6);
+      ctx.fillStyle = 'rgba(255,220,90,.22)'; ctx.beginPath(); ctx.arc(p.x, p.y, tol * s, 0, 7); ctx.fill();
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(Math.sin(t * 2) * 0.3);
+      ctx.fillStyle = '#ffd84a'; starPath(30 * S * s, 13 * S * s); ctx.fill();
+      ctx.strokeStyle = '#fff8d8'; ctx.lineWidth = 3 * S; ctx.stroke(); ctx.restore();
+      let dx = q.x - p.x, dy = q.y - p.y; const l = Math.hypot(dx, dy) || 1; dx /= l; dy /= l;
+      let nx = -dy, ny = dx; // put the arrow beside the path, on the outside of the shape
+      if ((p.x - sh.cx) * nx + (p.y - sh.cy) * ny < 0) { nx = -nx; ny = -ny; }
+      const off = 52 * S, wob = Math.sin(t * 5) * 8 * S;
+      arrow(p.x + nx * off + dx * wob, p.y + ny * off + dy * wob, dx, dy, 80 * S, '#ffd84a', 7 * S);
+    } else if (z.next < n) { // ring around the next dot
+      const p = pts[z.next], s = 1 + 0.25 * Math.sin(t * 8);
+      ctx.strokeStyle = 'rgba(255,230,120,.8)'; ctx.lineWidth = 3 * S;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 18 * S * s, 0, 7); ctx.stroke();
+    }
+    // finish mark
+    const e = pts[n - 1];
+    if (dist(e, pts[0]) > 40 * S) { ctx.strokeStyle = 'rgba(255,255,255,.6)'; ctx.lineWidth = 3 * S; ctx.beginPath(); ctx.arc(e.x, e.y, 13 * S, 0, 7); ctx.stroke(); }
+  }
+  ctx.restore();
+  // hints in chalk
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = `600 ${26 * S}px "Cinzel", Georgia, serif`;
+  const b = z.board, hy = b.y0 + 26 * S;
+  if (!sh.done && !sh.fizzled && state === 'play') {
+    ctx.fillStyle = 'rgba(255,255,255,.75)';
+    if (z.next > 0 && z.lostT > LOST_TIME) { ctx.fillStyle = '#ffd84a'; ctx.fillText('Come back to the gold ✨', sh.cx, hy); }
+    else if (z.next === 0) ctx.fillText('Start at the ⭐', sh.cx, hy);
+    else ctx.fillText(SHAPES[sh.kind].name.replace('!', ''), sh.cx, hy);
+    if (z.level.limit && z.timing) { // gentle time bar
+      const k = clamp(1 - z.elapsed / z.level.limit), bw = (b.x1 - b.x0) * 0.4;
+      ctx.fillStyle = 'rgba(255,255,255,.15)'; ctx.fillRect(sh.cx - bw / 2, hy + 20 * S, bw, 8 * S);
+      ctx.fillStyle = k > 0.5 ? '#7dff8a' : k > 0.25 ? '#ffd84a' : '#ff8a5b'; ctx.fillRect(sh.cx - bw / 2, hy + 20 * S, bw * k, 8 * S);
+    }
+  }
+}
+function drawTrail(z) {
+  const tr = z.trail, now = performance.now() / 1000;
+  ctx.lineCap = 'round';
+  for (let i = 1; i < tr.length; i++) {
+    const a = tr[i - 1], b = tr[i];
+    if (!a || !b) continue;
+    const k = clamp(1 - (now - b.t) / 0.6);
+    ctx.strokeStyle = `rgba(255,215,90,${0.25 * k})`; ctx.lineWidth = 22 * S * k + 2;
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    ctx.strokeStyle = `rgba(255,250,225,${0.9 * k})`; ctx.lineWidth = 6 * S * k + 1;
+    ctx.stroke();
+  }
+  if (z.wand) {
+    const w = z.wand;
+    ctx.fillStyle = 'rgba(255,230,140,.25)'; ctx.beginPath(); ctx.arc(w.x, w.y, WAND_R * S * 1.7, 0, 7); ctx.fill();
+    ctx.save(); ctx.translate(w.x, w.y); ctx.rotate(now * 2.5);
+    ctx.fillStyle = '#fff6c8'; starPath(WAND_R * S, WAND_R * S * 0.45); ctx.fill();
+    ctx.lineWidth = 3 * S; ctx.strokeStyle = z.color; ctx.stroke(); ctx.restore();
+  }
+}
+
+function draw() {
+  const n = zones.length || settings.players;
+  if (bgFor !== n) buildBg(n);
+  ctx.drawImage(bg, 0, 0, W, H);
+  // the camera picture, faint, so the kids can see themselves in the classroom
+  if (video.readyState >= 2) {
+    ctx.save(); ctx.globalAlpha = 0.22; ctx.translate(W, 0); ctx.scale(-1, 1);
+    ctx.drawImage(video, 0, 0, W, H); ctx.restore();
+  }
+
+  for (const z of zones) {
+    if (z.shape) drawShape(z);
+    z.fx.forEach(drawFx);
+  }
+  for (const p of particles) {
+    ctx.globalAlpha = clamp(p.life / 0.6); ctx.fillStyle = p.col;
+    ctx.beginPath(); ctx.arc(p.x, p.y, (p.r || 6) * S, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  for (const z of zones) {
+    drawTrail(z);
+    const b = z.board, mid = (b.zx0 + b.zx1) / 2;
+    ctx.fillStyle = z.color; ctx.font = `800 ${62 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.fillText(z.score, mid + 40 * S, 8 * S);
+    drawFace(z.face, mid - 50 * S, 42 * S, 34 * S, z.color);
+    ctx.font = `600 ${22 * S}px "Cinzel Decorative", Georgia, serif`; ctx.fillStyle = '#fff';
+    ctx.fillText(z.face.name + ' · ' + z.level.name, mid, 84 * S);
+  }
+  if (zones.length === 2) {
+    ctx.strokeStyle = 'rgba(247,200,67,.45)'; ctx.lineWidth = 4; ctx.setLineDash([20, 16]);
+    ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke(); ctx.setLineDash([]);
+  }
+  for (const t of texts) {
+    const a = clamp(t.life / 0.5);
+    ctx.globalAlpha = a; ctx.font = `800 ${(t.size || 50) * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.lineWidth = 6 * S; ctx.strokeStyle = 'rgba(20,10,40,.8)'; ctx.strokeText(t.t, t.x, t.y);
+    ctx.fillStyle = t.col; ctx.fillText(t.t, t.x, t.y);
+  }
+  ctx.globalAlpha = 1;
+
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#fff';
+  if (state === 'play') {
+    ctx.font = `800 ${40 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillStyle = timeLeft < 10 ? '#ff6b6b' : '#fff';
+    ctx.fillText('⌛ ' + Math.ceil(timeLeft), W / 2, H - 34 * S);
+  }
+  if (state === 'count') {
+    const c = Math.ceil(countdown);
+    ctx.fillStyle = 'rgba(18,10,36,.45)'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#fff';
+    ctx.font = `900 ${260 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillText(c > 0 ? c : 'GO!', W / 2, H / 2);
+    ctx.font = `600 ${36 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillText('Draw the spell with your wand!', W / 2, H / 2 + 170 * S);
+  }
+}
+
+// read-only helper for automatic tests: where are the dots of each shape now?
+window.spellTest = {
+  get state() { return state; },
+  zones: () => zones.map(z => ({ i: z.i, level: z.key, kind: z.shape?.kind, next: z.next, score: z.score, cool: z.cool,
+    tol: z.level.tol * S, pts: z.shape ? z.shape.pts.map(p => ({ x: p.x, y: p.y })) : [] })),
+};
+
+// ---------- main loop ----------
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  track(now); update(dt); draw();
+  requestAnimationFrame(loop);
+}
+resize(); refreshMenu();
+requestAnimationFrame(loop);
+setup();
+</script>
+</body>
+</html>

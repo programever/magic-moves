@@ -89,7 +89,7 @@ const LEVELS = {
   easy: { name: 'Easy', every: 1.7, travel: 4.2, R: 135, hit: 1.15, gold: 0.15, bad: 0 },
   hard: { name: 'Hard', every: 1.0, travel: 2.6, R: 90, hit: 0.8, gold: 0.12, bad: 1.6 }, // bad = seconds between obstacles
 };
-const ROUND = +new URLSearchParams(location.search).get('t') || 40; // ?t=10 = 10 second round
+const ROUND = +new URLSearchParams(location.search).get('t') || 35; // ?t=10 = 10 second round
 const BOOST = 3, COOL = 5, BOOST_SPEED = 1.6; // boost lasts 3 s, then 5 s to recharge
 const FACES = { easy: KIDS.player1, hard: KIDS.player2 }; // Easy = player 1, Hard = player 2
 const drawFace = (f, x, y, r, ring) => drawKidFace(ctx, f, x, y, r, ring);

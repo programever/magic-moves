@@ -88,7 +88,7 @@ const LEVELS = {
   easy: { name: 'Easy', every: 2.2, rMin: 64, rMax: 74, vMin: 32, vMax: 48, side: 0, hold: 0.6, big: 0.15, max: 4, miss: 0, fill: 5 },
   hard: { name: 'Hard', every: 1.5, rMin: 48, rMax: 56, vMin: 42, vMax: 68, side: 0.25, hold: 0.7, big: 0.15, max: 5, miss: 1, fill: 4 },
 };
-const ROUND = +new URLSearchParams(location.search).get('t') || 40, HAND_R = 34; // ?t=10 = 10 second round
+const ROUND = +new URLSearchParams(location.search).get('t') || 35, HAND_R = 34; // ?t=10 = 10 second round
 const FACES = { easy: KIDS.player1, hard: KIDS.player2 }; // Easy = player 1, Hard = player 2
 const drawFace = (f, x, y, r, ring) => drawKidFace(ctx, f, x, y, r, ring);
 const COLORS = ['#ff8a7a', '#7fc4ff'];

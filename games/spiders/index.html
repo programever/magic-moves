@@ -93,7 +93,7 @@ const LEVELS = {
   hard: { name: 'Hard', warn: 1.25, speed: 430, gap: [0.5, 1.2], duck: 0.5, single: false, lose: 1,
     duckThr: 0.12, jumpThr: 0.05, win: 0.25, late: 0.12, apart: 1.0 },
 };
-const ROUND = +new URLSearchParams(location.search).get('t') || 40; // ?t=10 = 10 second round
+const ROUND = +new URLSearchParams(location.search).get('t') || 35; // ?t=10 = 10 second round
 const FACES = { easy: KIDS.player1, hard: KIDS.player2 }; // Easy = player 1, Hard = player 2
 const COLORS = ['#ff6b5b', '#6fb4ff'];
 const JUMP_TIME = 0.7, JUMP_H = 130;
