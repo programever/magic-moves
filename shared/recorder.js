@@ -9,7 +9,7 @@
 import { video } from './tracking.js';
 
 const SKIP = 5000;                     // do not record the first 5 seconds of a round (countdown, getting ready)
-const VW = 1280, VH = 720, FPS = 24;   // video size
+const VW = 960, VH = 540, FPS = 20;    // video size: small, so the Intel Mac stays fast while playing
 let rec = null, chunks = [], url = null, mic = null, micAsked = false, songs = [], waitTimer = null, round = 0;
 let comp = null, cctx = null, drawTimer = null, game = null;
 let recCtx = null, recDest = null, micSrc = null;
@@ -43,7 +43,7 @@ function setupSound(ac, m) {
   if (m && !micSrc) { micSrc = ac.createMediaStreamSource(m); connect.call(micSrc, recDest); } // recording only, not the speakers
 }
 
-function drawFrame() { // copy the game screen into the video (a fixed 1280 x 720, so the Intel Mac stays fast)
+function drawFrame() { // copy the game screen into the small video canvas
   if (!game || !game.width) return;
   const h = Math.round(VW * game.height / game.width);
   if (comp.height !== h) comp.height = h;
@@ -71,7 +71,7 @@ function begin() {
     const stream = comp.captureStream(FPS);
     if (recDest) recDest.stream.getAudioTracks().forEach(t => stream.addTrack(t));
     const type = ['video/webm;codecs=vp8,opus', 'video/webm'].find(t => MediaRecorder.isTypeSupported(t));
-    const r = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 3_000_000 });
+    const r = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 1_800_000 });
     chunks = [];
     r.ondataavailable = e => e.data.size && chunks.push(e.data);
     r.start(1000);
