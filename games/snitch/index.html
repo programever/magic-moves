@@ -85,7 +85,7 @@ const LEVELS = {
   easy: { name: 'Easy', every: 1.3, rMin: 46, rMax: 56, vMin: 90, vMax: 150, life: 6, bad: 0, gold: 0.1 },
   hard: { name: 'Hard', every: 0.6, rMin: 32, rMax: 40, vMin: 220, vMax: 340, life: 4, bad: 0.18, gold: 0.07 },
 };
-const ROUND = +new URLSearchParams(location.search).get('t') || 60, HAND_R = 34; // ?t=10 = 10 second round
+const ROUND = +new URLSearchParams(location.search).get('t') || 40, HAND_R = 34; // ?t=10 = 10 second round
 const FACES = { easy: KIDS.player1, hard: KIDS.player2 }; // Easy = player 1, Hard = player 2
 const drawFace = (f, x, y, r, ring) => drawKidFace(ctx, f, x, y, r, ring);
 const COLORS = ['#ff6b5b', '#6fb4ff'];

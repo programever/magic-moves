@@ -135,7 +135,7 @@ const LEVELS = {
   easy: { name: 'Easy', time: 4, hold: 0.4, pool: ['up', 'wings', 'hips', 'head'] },
   hard: { name: 'Hard', time: 2.5, hold: 0.4, pool: POSES.map(p => p.id) },
 };
-const ROUND = +new URLSearchParams(location.search).get('t') || 60; // ?t=10 = 10 second round
+const ROUND = +new URLSearchParams(location.search).get('t') || 40; // ?t=10 = 10 second round
 const FACES = { easy: KIDS.player1, hard: KIDS.player2 }; // Easy = player 1, Hard = player 2
 const COLORS = ['#ff6b5b', '#6fb4ff'];                   // Gryffindor red, Ravenclaw blue
 const HOUSE = [{ main: '#9c1a1a', trim: '#f2c14e' }, { main: '#1c3f8f', trim: '#c9b27c' }];

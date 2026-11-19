@@ -93,7 +93,7 @@ const LEVELS = {
           every: 0.8, maxEggs: 6, r: 32, life: 5.5, shiny: 0.08 },
 };
 const DEBUG = new URLSearchParams(location.search).has('debug');
-const ROUND = +new URLSearchParams(location.search).get('t') || 60, HAND_R = 34; // ?t=10 = 10 second round
+const ROUND = +new URLSearchParams(location.search).get('t') || 40, HAND_R = 34; // ?t=10 = 10 second round
 const BRAVE = 2;
 const FACES = { easy: KIDS.player1, hard: KIDS.player2 }; // Easy = player 1, Hard = player 2
 const drawFace = (f, x, y, r, ring) => drawKidFace(ctx, f, x, y, r, ring);
