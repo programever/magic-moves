@@ -87,11 +87,12 @@ addEventListener('resize', resize); resize();
 // sleep/awake = seconds, warn = warning before the dragon opens her eyes,
 // still = how much moving is allowed while awake (in shoulder-widths per second), drain = seconds of moving before the roar
 const LEVELS = {
-  easy: { name: 'Easy', sleep: [5, 8], warn: 1.5, awake: [2, 3], still: 0.75, drain: 0.8, grace: 0.6, lose: 1,
+  easy: { name: 'Easy', sleep: [5, 8], warn: 1.5, awake: [2, 3], still: 0.45, drain: 0.45, grace: 0.6, lose: 1,
           every: 1.1, maxEggs: 5, r: 44, life: 8, shiny: 0.12 },
-  hard: { name: 'Hard', sleep: [3.5, 6.5], warn: 1.0, awake: [2.5, 4], still: 0.4, drain: 0.4, grace: 0.35, lose: 2,
+  hard: { name: 'Hard', sleep: [3.5, 6.5], warn: 1.0, awake: [2.5, 4], still: 0.3, drain: 0.25, grace: 0.35, lose: 2,
           every: 0.8, maxEggs: 6, r: 32, life: 5.5, shiny: 0.08 },
 };
+const DEBUG = new URLSearchParams(location.search).has('debug');
 const ROUND = +new URLSearchParams(location.search).get('t') || 60, HAND_R = 34; // ?t=10 = 10 second round
 const BRAVE = 2;
 const FACES = { easy: KIDS.player1, hard: KIDS.player2 }; // Easy = player 1, Hard = player 2
@@ -244,8 +245,8 @@ function assignBodies(dt) {
 }
 
 // How much is she moving? Nose, shoulders and wrists are smoothed, then each point is compared with
-// where it was 0.3 s ago. Measured in shoulder-widths per second, so it is the same near or far from the camera.
-const BODY_POINTS = [0, 11, 12, 15, 16], LOOK_BACK = 0.3;
+// where it was 0.3 s ago. The FASTEST point counts (so moving only the arms is moving too). Measured in shoulder-widths per second, so it is the same near or far from the camera.
+const BODY_POINTS = [0, 11, 12, 13, 14, 15, 16], LOOK_BACK = 0.3; // nose, shoulders, elbows, wrists
 function updateMotion(z, b, dt) {
   const now = performance.now() / 1000;
   if (!b || b.sw < 15) {
@@ -268,11 +269,11 @@ function updateMotion(z, b, dt) {
   const old = z.hist[0], span = now - old.t;
   let speed = 0;
   if (span > 0.1) {
-    let sum = 0, n = 0;
-    z.sm.forEach((s, j) => { if (s.ok && old.pts[j].ok) { sum += Math.hypot(s.x - old.pts[j].x, s.y - old.pts[j].y); n++; } });
-    if (n) speed = sum / n / span / b.sw;
+    let most = 0;
+    z.sm.forEach((s, j) => { if (s.ok && old.pts[j].ok) most = Math.max(most, Math.hypot(s.x - old.pts[j].x, s.y - old.pts[j].y)); });
+    speed = most / span / b.sw;
   }
-  z.motion += (speed - z.motion) * (1 - Math.exp(-dt * 8));
+  z.motion += (speed - z.motion) * (1 - Math.exp(-dt * 12));
 }
 
 // test keys: holding an arrow = player 1 is "moving", A or D = player 2 (both = the only player in 1-player mode)
@@ -322,10 +323,9 @@ function updateDragon(z, dt) {
     z.penalized = false; z.seen = false; z.calm = 1;
   } else if (z.phase === 'awake') {
     const moving = keyMoving(z) || (z.body && z.motion > L.still);
-    if (z.body || keyMoving(z) || (mouse && zoneOf(mouse.x) === z)) z.seen = true; // somebody is playing here
+    if (z.body || keyMoving(z)) z.seen = true; // somebody is playing here
     if (!z.penalized && z.pt > L.grace) {
-      if (moving) z.calm -= dt / L.drain;
-      else z.calm = Math.min(1, z.calm + dt * 0.6);
+      if (moving) z.calm -= dt / L.drain; // the meter does not refill while the dragon is awake
       if (z.calm <= 0) roarAt(z);
     }
     if (z.pt >= z.dur) {
@@ -753,6 +753,10 @@ function drawStatus(z, x0, x1, t) {
     if (c > 0.01) { ctx.fillStyle = c > 0.6 ? '#4fe36b' : c > 0.3 ? '#ffd23f' : '#ff5a3c'; pill(mx, my, Math.max(mh, mw * c), mh); ctx.fill(); }
     ctx.font = `600 ${15 * S}px "Cinzel", Georgia, serif`; ctx.fillStyle = '#fff';
     ctx.fillText(z.penalized ? 'You moved!' : 'Stillness 🧊', cx, my + mh + 12 * S);
+  }
+  if (DEBUG && state === 'play') { // ?debug=1 shows the movement number, to tune 'still' with real kids
+    ctx.font = `700 ${18 * S}px monospace`; ctx.fillStyle = z.motion > z.level.still ? '#ff5a3c' : '#4fe36b';
+    ctx.fillText(`move ${z.motion.toFixed(2)} / limit ${z.level.still}  body ${z.body ? 'yes' : 'NO'}`, cx, y + h + 60 * S);
   }
 }
 

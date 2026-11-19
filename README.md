@@ -13,6 +13,7 @@ games/<name>/        one folder per game (index.html + its own music/pictures)
   feather/           Wingardium Leviosa: keep falling feathers up with the wand
   dragon/            Dragon Egg Hunt: collect eggs while the dragon sleeps, FREEZE when it wakes
   spiders/           Escape the Spiders: jump over logs, duck under webs
+  hat/               Sorting Hat Dance: copy the pose the hat calls out
 shared/              used by every game
   tracking.js        camera + body tracking (MediaPipe pose, 2 players)
   kids.js            players: names + faces, drawKidFace(), kidImg()
