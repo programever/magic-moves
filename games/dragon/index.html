@@ -87,9 +87,9 @@ addEventListener('resize', resize); resize();
 // sleep/awake = seconds, warn = warning before the dragon opens her eyes,
 // still = how much moving is allowed while awake (in shoulder-widths per second), drain = seconds of moving before the roar
 const LEVELS = {
-  easy: { name: 'Easy', sleep: [5, 8], warn: 1.5, awake: [2, 3], still: 0.45, drain: 0.45, grace: 0.6, lose: 1,
+  easy: { name: 'Easy', sleep: [5, 8], warn: 1.0, awake: [2, 3], still: 0.45, drain: 0.2, grace: 0.1, lose: 1,
           every: 1.1, maxEggs: 5, r: 44, life: 8, shiny: 0.12 },
-  hard: { name: 'Hard', sleep: [3.5, 6.5], warn: 1.0, awake: [2.5, 4], still: 0.3, drain: 0.25, grace: 0.35, lose: 2,
+  hard: { name: 'Hard', sleep: [3.5, 6.5], warn: 1.0, awake: [2.5, 4], still: 0.3, drain: 0.12, grace: 0.1, lose: 2,
           every: 0.8, maxEggs: 6, r: 32, life: 5.5, shiny: 0.08 },
 };
 const DEBUG = new URLSearchParams(location.search).has('debug');
