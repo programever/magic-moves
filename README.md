@@ -22,6 +22,7 @@ games/<name>/        one folder per game (index.html + its own music/pictures)
   jacks/             Jumping Jack Spell: jumping jacks light up the Great Hall, 10 = Lumos Maxima
   sword/             Sword of Gryffindor: swing both hands to slash flying cursed objects, not Hedwig
   tower/             Astronomy Tower: climb in place (hands over head in turn) to reach the telescope
+  basilisk/          Basilisk Escape: jump the tail, duck the head, bonk the tired Basilisk with the sword
 shared/              used by every game
   recorder.js        records the camera + microphone each round; end screen: Replay / Save video (else deleted)
   tracking.js        camera + body tracking (MediaPipe pose, 2 players)

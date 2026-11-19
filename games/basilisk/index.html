@@ -1,0 +1,1024 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Basilisk Escape</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Cinzel:wght@600;800&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; height: 100%; background: #07140f; overflow: hidden;
+    font-family: "Cinzel", Georgia, serif; color: #fff; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; }
+  video { display: none; }
+  .overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 16px; background: rgba(6, 20, 14, .86); text-align: center; }
+  .hidden { display: none !important; }
+  h1 { font-family: "Cinzel Decorative", Georgia, serif; font-size: 56px; margin: 0; color: #f7c843;
+    text-shadow: 0 0 25px #ffb30088; }
+  #end { background: rgba(6, 20, 14, .55); gap: 10px; }
+  #end h1 { font-size: 44px; }
+  #trophy { display: flex; gap: 60px; }
+  .cup { position: relative; width: 170px; filter: drop-shadow(0 0 25px #ffd700);
+    animation: shine 1.2s ease-in-out infinite alternate; }
+  .cup svg { width: 170px; display: block; }
+  .cupface { position: absolute; left: 50%; top: 65px; transform: translate(-50%, -50%); }
+  .cupface img { width: 72px !important; height: 72px !important; }
+  @keyframes shine { from { transform: rotate(-4deg) scale(1); } to { transform: rotate(4deg) scale(1.07); } }
+  .row { display: flex; gap: 14px; align-items: center; font-size: 28px; }
+  .row span { width: 220px; text-align: right; }
+  button { font: inherit; font-size: 28px; padding: 12px 28px; border-radius: 40px; border: 3px solid #fff3;
+    background: #ffffff14; color: #fff; cursor: pointer; }
+  button.on { background: #f7c843; border-color: #f7c843; color: #2a1600; font-weight: 800; }
+  #start, .again { font-size: 40px; padding: 18px 60px; background: #1d6b3a; border-color: #f7c843;
+    color: #f7e7b0; font-weight: 800; }
+  .help { font-size: 22px; opacity: .8; max-width: 980px; line-height: 1.5; }
+  #status { position: fixed; bottom: 20px; left: 0; right: 0; text-align: center; font-size: 26px; }
+  #result { font-size: 28px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="menu" class="overlay">
+  <h1>🐍 Basilisk Escape 🐍</h1>
+  <div class="row"><span>Players</span>
+    <button data-players="1">1 player</button><button data-players="2">2 players</button></div>
+  <div class="row" id="lvl0"><span id="lvl0name">Left player</span>
+    <button data-side="0" data-level="easy">Easy</button><button data-side="0" data-level="hard">Hard</button></div>
+  <div class="row" id="lvl1"><span>Right player</span>
+    <button data-side="1" data-level="easy">Easy</button><button data-side="1" data-level="hard">Hard</button></div>
+  <button id="home" onclick="location.href='../../'">🏠 All games</button>
+  <button id="start">Start ▶</button>
+  <div class="help">Tail on the floor: <b>JUMP ⬆</b> &nbsp; Head up high: <b>DUCK ⬇</b> &nbsp; Dodge = 1 point.<br>
+    Basilisk tired? Swing the Sword of Gryffindor with BOTH hands: BONK = 3 points. 3 bonks = it falls asleep (+10)!<br>
+    Stand tall and still during 3‑2‑1.<br>
+    Keys: Space start, Esc menu, F full screen, M music, C camera, H all games.<br>
+    Test: ↑/↓ + Z (sword) left player, W/S + X right player, mouse = sword</div>
+</div>
+
+<div id="end" class="overlay hidden">
+  <h1 id="endTitle"></h1>
+  <div id="trophy"></div>
+  <div id="result"></div>
+  <button class="again">Play again ▶</button>
+  <button id="toMenu">Menu</button>
+</div>
+
+<div id="status"></div>
+
+<script type="module">
+import { video, startTracking, track as trackPoses } from '../../shared/tracking.js';
+import { KIDS, drawKidFace, kidImg } from '../../shared/kids.js';
+import { recStart, recStop, recCancel } from '../../shared/recorder.js';
+import { look, nextLook, drawCameraOver, setupLookMenu } from '../../shared/look.js';
+
+const $ = s => document.querySelector(s);
+const canvas = $('#c'), ctx = canvas.getContext('2d');
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, k) => a + (b - a) * k;
+const ease = k => k * k * (3 - 2 * k);
+const seen = lm => lm && (lm.visibility ?? 1) > 0.5;
+
+let W, H, S, GY; // GY = ground line (where the feet stand)
+const bg = document.createElement('canvas'), bgx = bg.getContext('2d');
+function resize() {
+  const d = devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight; S = H / 900; GY = H * 0.86;
+  canvas.width = W * d; canvas.height = H * d; ctx.setTransform(d, 0, 0, d, 0, 0);
+  bg.width = W * d; bg.height = H * d; bgx.setTransform(d, 0, 0, d, 0, 0);
+  paintChamber();
+}
+
+// ---------- settings ----------
+// warn = seconds the hint shows before the tail/head reaches her. speed = pixels per second (at least).
+// duck = how many moves are DUCK (head). duckThr / jumpThr = how far the nose must move (part of screen height).
+// win = how early a jump/duck still counts. late = how late it still counts.
+// tired = after this many moves the Basilisk gets tired. swing = how fast the sword tip must move (pixels per second).
+const LEVELS = {
+  easy: { name: 'Easy', warn: 2.0, speed: 240, gap: [1.0, 1.8], duck: 0.75, single: true, lose: 0,
+    duckThr: 0.08, jumpThr: 0.035, win: 0.6, late: 0.25, tired: 2, swing: 300 },
+  hard: { name: 'Hard', warn: 1.2, speed: 430, gap: [0.5, 1.2], duck: 0.5, single: false, lose: 1,
+    duckThr: 0.12, jumpThr: 0.05, win: 0.25, late: 0.12, apart: 1.0, tired: 4, swing: 650 },
+};
+const ROUND = +new URLSearchParams(location.search).get('t') || 35; // ?t=10 = 10 second round
+const FACES = { easy: KIDS.player1, hard: KIDS.player2 }; // Easy = player 1, Hard = player 2
+const COLORS = ['#ff6b5b', '#6fb4ff'];
+const GOLD = '#ffd84a', MAX_PARTS = 120;
+const JUMP_TIME = 0.7, JUMP_H = 130;
+const LOWER = 0.8, TIRED_TIME = 3, BONKS_TO_WIN = 3;
+const settings = { players: 2, levels: ['easy', 'hard'] };
+
+const markLook = setupLookMenu(); // Camera Dim / Normal / Bright row in the menu (shared/look.js)
+function refreshMenu() {
+  document.querySelectorAll('[data-players]').forEach(b => b.classList.toggle('on', +b.dataset.players === settings.players));
+  document.querySelectorAll('[data-level]').forEach(b => b.classList.toggle('on', settings.levels[b.dataset.side] === b.dataset.level));
+  $('#lvl1').classList.toggle('hidden', settings.players === 1);
+  $('#lvl0name').textContent = settings.players === 1 ? 'Level' : 'Left player';
+}
+document.querySelectorAll('[data-players]').forEach(b => b.onclick = () => { settings.players = +b.dataset.players; refreshMenu(); });
+document.querySelectorAll('[data-level]').forEach(b => b.onclick = () => { settings.levels[b.dataset.side] = b.dataset.level; refreshMenu(); });
+refreshMenu();
+
+// ---------- sound ----------
+let ac, noise = null;
+function tone(type, f1, f2, dur, vol, delay = 0) {
+  const t = ac.currentTime + delay, o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.connect(g); g.connect(ac.destination);
+  o.frequency.setValueAtTime(f1, t); o.frequency.exponentialRampToValueAtTime(f2, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function whoosh(vol = 0.35, dur = 0.3, f1 = 500, f2 = 3000, type = 'bandpass') { // filtered noise that sweeps
+  if (!noise) {
+    noise = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+    const d = noise.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  }
+  const t = ac.currentTime, s = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
+  s.buffer = noise; f.type = type; f.Q.value = 1.2;
+  f.frequency.setValueAtTime(f1, t); f.frequency.exponentialRampToValueAtTime(f2, t + dur);
+  g.gain.setValueAtTime(0.001, t); g.gain.exponentialRampToValueAtTime(vol, t + dur * .3); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  s.connect(f); f.connect(g); g.connect(ac.destination); s.start(t); s.stop(t + dur + 0.02);
+}
+function boing() { // a springy "boing": the pitch jumps up, then wobbles down
+  const t = ac.currentTime, o = ac.createOscillator(), g = ac.createGain(), lfo = ac.createOscillator(), lg = ac.createGain();
+  o.type = 'sine'; lfo.frequency.value = 16; lg.gain.value = 40;
+  lfo.connect(lg); lg.connect(o.frequency); o.connect(g); g.connect(ac.destination);
+  o.frequency.setValueAtTime(140, t); o.frequency.linearRampToValueAtTime(520, t + 0.07);
+  o.frequency.exponentialRampToValueAtTime(110, t + 0.55);
+  g.gain.setValueAtTime(0.45, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+  o.start(t); lfo.start(t); o.stop(t + 0.62); lfo.stop(t + 0.62);
+}
+function sfx(kind) {
+  if (!ac) return;
+  if (kind === 'yay') [784, 988, 1319].forEach((f, i) => tone('sine', f, f * 1.02, 0.2, 0.22, i * 0.07));
+  if (kind === 'hit') { boing(); [1400, 1700, 1400, 1800].forEach((f, i) => tone('triangle', f, f * 1.3, 0.07, 0.07, 0.35 + i * 0.09)); }
+  if (kind === 'warn') { whoosh(0.12, 0.35, 3000, 6000, 'highpass'); tone('sine', 660, 990, 0.12, 0.06); } // a soft "hiss"
+  if (kind === 'jump') tone('square', 300, 700, 0.15, 0.05);
+  if (kind === 'swish') whoosh(0.2, 0.25, 700, 2600);
+  if (kind === 'clonk') { tone('triangle', 320, 140, 0.25, 0.4); tone('sine', 1568, 1568, 0.4, 0.15, 0.05); tone('sine', 2093, 2093, 0.4, 0.1, 0.12); }
+  if (kind === 'yawn') tone('sine', 500, 180, 0.9, 0.12);
+  if (kind === 'snore') { tone('sawtooth', 70, 55, 0.7, 0.05); tone('sine', 140, 110, 0.7, 0.08); }
+  if (kind === 'beep') tone('square', 600, 600, 0.12, 0.15);
+  if (kind === 'go') tone('square', 900, 900, 0.3, 0.15);
+  if (kind === 'win') [523, 659, 784, 1047, 1319].forEach((f, i) => { tone('triangle', f, f, 0.3, 0.2, i * 0.1); tone('sine', f * 2, f * 2, 0.2, 0.06, i * 0.1); });
+  if (kind === 'end') // trumpet fanfare
+    [[523, 0, .15], [523, .18, .15], [523, .36, .15], [698, .54, .35], [880, .92, .2], [784, 1.12, .2], [1047, 1.32, .9]]
+      .forEach(([f, d, len]) => { tone('sawtooth', f, f, len, 0.12, d); tone('triangle', f, f, len, 0.25, d); });
+}
+
+// ---------- background music (made by code: a magic waltz in E minor, 3 beats per bar) ----------
+const MELODY = [76, 79, 83,  84, 83, 79,  81, 76, 72,  75, 78, 71,
+                83, 79, 76,  79, 84, 88,  84, 81, 76,  78, 75, 71];
+const ROOTS = [40, 36, 45, 47], STEP = 60 / 150;
+let musicOn = true, musicTimer = null, musicStep = 0, nextNote = 0, musicGain = null;
+const midi = m => 440 * 2 ** ((m - 69) / 12);
+function note(freq, t, dur, type, vol) {
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.frequency.value = freq; o.connect(g); g.connect(musicGain);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function playStep(i, t) {
+  const m = MELODY[i % 24], beat = i % 3, root = ROOTS[Math.floor(i / 3) % 4];
+  note(midi(m), t, 1.0, 'sine', 0.45); note(midi(m + 12), t, 0.35, 'sine', 0.15);
+  if (beat === 0) note(midi(root), t, STEP * 2.5, 'triangle', 0.6);
+  else note(midi(root + 12 + (beat === 1 ? 7 : 12)), t, STEP * 0.8, 'triangle', 0.25);
+}
+// Real music files from Iker (shared/music/, not in git). If a file can't play, the code waltz plays instead.
+const gameSong = new Audio('../../shared/music/game.mp3'), winnerSong = new Audio('../../shared/music/winner.mp3');
+gameSong.loop = true; gameSong.volume = 0.4; winnerSong.volume = 0.7;
+let winnerTimer = null;
+function startMusic() {
+  if (!musicOn) return;
+  stopWinnerSong();
+  gameSong.currentTime = 0;
+  gameSong.play().catch(startSynth);
+}
+function stopMusic() { gameSong.pause(); stopSynth(); }
+function playWinnerSong() {
+  if (!musicOn) return;
+  winnerTimer = setTimeout(() => { winnerSong.currentTime = 0; winnerSong.play().catch(() => {}); }, 2200);
+}
+function stopWinnerSong() { clearTimeout(winnerTimer); winnerSong.pause(); }
+function startSynth() {
+  if (!ac || !musicOn || musicTimer) return;
+  musicGain = ac.createGain(); musicGain.gain.value = 0.096; musicGain.connect(ac.destination);
+  musicStep = 0; nextNote = ac.currentTime + 0.05;
+  musicTimer = setInterval(() => {
+    while (nextNote < ac.currentTime + 0.12) { playStep(musicStep++, nextNote); nextNote += STEP; }
+  }, 25);
+}
+function stopSynth() {
+  if (!musicTimer) return;
+  clearInterval(musicTimer); musicTimer = null;
+  musicGain.gain.setTargetAtTime(0, ac.currentTime, 0.1);
+}
+
+// ---------- camera + body tracking ----------
+let poses = [];
+const status = t => $('#status').textContent = t;
+const sx = lm => (1 - lm.x) * W; // camera is mirrored
+
+// ---------- game state ----------
+let state = 'menu', timeLeft = 0, countdown = 0, gt = 0, zones = [], particles = [], texts = [];
+const keys = new Set();
+let mouse = null; // test sword: { x, y, t }
+
+// side = where the Basilisk's coils are (-1 = left edge, 1 = right edge). Its HEAD comes from that side,
+// its TAIL comes from the other side. It never chases her: moves only come from these fixed sides.
+function makeZones() {
+  zones = [];
+  for (let i = 0; i < settings.players; i++) {
+    const level = LEVELS[settings.levels[i]];
+    zones.push({ i, level, face: FACES[settings.levels[i]], color: COLORS[i], side: settings.players === 1 ? 1 : (i === 0 ? -1 : 1),
+      score: 0, dodges: 0, hits: 0, bonksAll: 0, wins: 0,
+      things: [], spawnT: 0.8, lastArrive: -9, moves: 0,
+      base: null, seenT: 9, bodyX: null, cx: 0, duckBody: 0, duck: 0, jumpT: -1, wasUp: false,
+      lastJump: -9, lastDuck: -9, ouch: 0, cheer: 0,
+      mode: 'fight', modeT: 0, bonks: 0, size: 1, glasses: Math.random() < .5, tailIn: 1,
+      swingA: 0, swingCd: 0, armAng: null, armSeen: 9, tip: null });
+  }
+  for (const z of zones) { const [x0, x1] = zoneX(z); z.cx = (x0 + x1) / 2; }
+}
+const zoneX = z => { const w = W / zones.length; return [z.i * w, (z.i + 1) * w]; };
+const coilX = z => { const [x0, x1] = zoneX(z), off = Math.min((x1 - x0) * .13, 170 * S); return z.side > 0 ? x1 - off : x0 + off; };
+const headHome = z => ({ x: coilX(z) - z.side * 20 * S * z.size, y: GY - 250 * S * z.size });
+const tailRest = z => { const [x0, x1] = zoneX(z); return z.side > 0 ? x0 + 70 * S : x1 - 70 * S; };
+const swordOut = z => z.mode === 'tired' || z.mode === 'bonked';
+
+// Each body goes to the half where its nose is (the closest body wins).
+// Baseline = her standing height, measured during 3-2-1 and slowly updated later.
+function readBodies(dt) {
+  const found = zones.map(() => null);
+  for (const p of poses) {
+    if (!p[0] || !p[11] || !p[12]) continue;
+    const zi = zones.length === 1 ? 0 : (sx(p[0]) < W / 2 ? 0 : 1);
+    const width = Math.abs(p[11].x - p[12].x);
+    if (!found[zi] || width > found[zi].width) found[zi] = { p, width };
+  }
+  zones.forEach((z, i) => {
+    const f = found[i];
+    if (!f) { z.seenT += dt; z.armSeen += dt; z.tip = null; if (z.seenT > 0.5) z.duckBody = Math.max(0, z.duckBody - dt * 3); return; }
+    z.seenT = 0;
+    const p = f.p, L = z.level;
+    const nose = p[0].y, sh = (p[11].y + p[12].y) / 2;
+    const hip = seen(p[23]) && seen(p[24]) ? (p[23].y + p[24].y) / 2 : null;
+    z.bodyX = (sx(p[11]) + sx(p[12])) / 2;
+    if (!z.base) z.base = { nose, sh, hip, torso: hip != null ? hip - sh : null };
+    const b = z.base;
+    if (b.hip == null && hip != null) { b.hip = hip; b.torso = hip - sh; }
+    const ema = (tau) => {
+      const k = 1 - Math.exp(-dt / tau);
+      b.nose += (nose - b.nose) * k; b.sh += (sh - b.sh) * k;
+      if (hip != null) { b.hip += (hip - b.hip) * k; b.torso += (hip - sh - b.torso) * k; }
+    };
+    // a small kid far from the camera moves less on screen, so the limits follow her body size
+    const scale = b.torso ? clamp(b.torso / 0.28, 0.6, 1.2) : 1;
+    const duckT = L.duckThr * scale, jumpT = L.jumpThr * scale;
+    const drop = nose - b.nose;
+    const rise = Math.max(b.nose - nose, b.sh - sh, hip != null && b.hip != null ? b.hip - hip : -1);
+    if (state === 'count') ema(0.4);
+    else if (state === 'play' && !swordOut(z)) { // stepping closer or further: follow slowly, faster when she stands normally
+      const normal = Math.abs(drop) < duckT * 0.4 && rise < jumpT * 0.5;
+      ema(normal ? 3 : 15);
+    }
+    const target = clamp(drop / duckT, 0, 1.2);
+    z.duckBody += (target - z.duckBody) * (1 - Math.exp(-dt / 0.06));
+    const up = rise > jumpT;
+    if (up && !z.wasUp && state !== 'count' && !swordOut(z)) startJump(z);
+    z.wasUp = up;
+    readSword(z, p, dt);
+  });
+}
+function startJump(z) {
+  if (z.jumpT >= 0 && z.jumpT < JUMP_TIME * 0.6) return; // already in the air
+  z.jumpT = 0; sfx('jump');
+}
+
+// The sword (like the Sword of Gryffindor game): both hands together = grip between the wrists,
+// the blade points along her forearms (elbow -> wrist). A fast move of the tip = a swing.
+function readSword(z, p, dt) {
+  const ok = i => p[i] && (p[i].visibility ?? 1) > 0.35;
+  const P = i => ({ x: sx(p[i]), y: p[i].y * H });
+  if (!ok(15) && !ok(16)) { z.armSeen += dt; z.tip = null; return; }
+  const arm = i => { const w = P(i), e = ok(i - 2) ? P(i - 2) : { x: w.x, y: w.y + 1 }; const dx = w.x - e.x, dy = w.y - e.y, n = Math.hypot(dx, dy) || 1; return { x: dx / n, y: dy / n }; };
+  let grip, dir;
+  if (ok(15) && ok(16)) { const a = P(15), c = P(16), da = arm(15), dc = arm(16); grip = { x: (a.x + c.x) / 2, y: (a.y + c.y) / 2 }; dir = { x: da.x + dc.x, y: da.y + dc.y }; }
+  else { const i = ok(16) ? 16 : 15; grip = P(i); dir = arm(i); }
+  const n = Math.hypot(dir.x, dir.y) || 1, len = 200 * S;
+  const tip = { x: grip.x + dir.x / n * len, y: grip.y + dir.y / n * len };
+  const ang = Math.atan2(dir.y, dir.x);
+  z.armAng = z.armAng == null ? ang : z.armAng + Math.atan2(Math.sin(ang - z.armAng), Math.cos(ang - z.armAng)) * 0.5;
+  z.armSeen = 0;
+  if (z.tip) {
+    const speed = Math.hypot(tip.x - z.tip.x, tip.y - z.tip.y) / Math.max(dt, 0.001);
+    if (speed > z.level.swing * S) trySwing(z);
+  }
+  z.tip = tip;
+}
+
+// test keys: Up/Down = left (or only) player, W/S = right player. Hold Down/S to duck.
+function readKeys() {
+  const z2 = zones[1] || zones[0];
+  return [keys.has('ArrowDown'), keys.has('KeyS')].map((d, i) => ({ z: i === 0 ? zones[0] : z2, d }));
+}
+
+// ---------- the Basilisk's moves ----------
+// high = the HEAD swings over (DUCK). low = the TAIL sweeps the floor (JUMP).
+function spawn(z) {
+  const L = z.level;
+  let high = Math.random() < L.duck;
+  const busy = h => z.things.some(t => t.high === h); // only one head and one tail!
+  if (busy(high)) high = !high;
+  if (busy(high)) return false;
+  const dir = high ? z.side : -z.side; // the side it starts from
+  const from = high ? headHome(z).x : tailRest(z);
+  // fast enough to leave its resting place after the first part of the warning (no jumping into place)
+  const v = Math.max(L.speed * S, Math.abs(from - z.cx) / (L.warn * 0.8));
+  z.things.push({ high, dir, v, arrive: gt + L.warn, x: from, done: false, back: false, backT: 0, fade: 1, hit: false });
+  z.lastArrive = gt + L.warn;
+  if (!high || Math.random() < .5) z.glasses = Math.random() < .55;
+  sfx('warn');
+  return true;
+}
+
+function judge(z, t) {
+  const L = z.level, last = t.high ? z.lastDuck : z.lastJump;
+  t.done = true; z.moves++;
+  if (last >= t.arrive - L.win) {
+    z.score += 1; z.dodges++; z.cheer = 0.6; sfx('yay');
+    burst(z.cx, GY - 150 * S, GOLD, 12);
+    texts.push({ x: z.cx + 110 * S, y: GY - 200 * S, t: '+1', life: 0.9, col: GOLD });
+  } else {
+    z.score = Math.max(0, z.score - L.lose); z.hits++; z.ouch = 1.2; t.hit = true; sfx('hit');
+    texts.push({ x: z.cx, y: GY - 300 * S, t: L.lose && z.score ? 'BONK! −1' : 'BONK! 😵', life: 1.2, col: '#ff9de2', small: true });
+  }
+}
+function burst(x, y, col, n, sp = 1) {
+  n = Math.min(n, MAX_PARTS - particles.length);
+  for (let k = 0; k < n; k++) {
+    const a = rand(0, 6.28), v = rand(150, 380) * S * sp;
+    particles.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0.6, col });
+  }
+}
+
+// a sword swing (from her arms, the Z/X keys or the mouse)
+function trySwing(z) {
+  if (!z || !swordOut(z) || z.swingCd > 0 || state !== 'play') return;
+  z.swingA = 0.3; z.swingCd = 0.4; sfx('swish');
+  if (z.mode === 'tired' && z.modeT >= LOWER) bonk(z);
+}
+function bonk(z) {
+  const h = headPose(z, performance.now() / 1000);
+  z.score += 3; z.bonks++; z.bonksAll++; z.size *= 0.88;
+  sfx('clonk');
+  burst(h.x, h.y, GOLD, 14); burst(h.x, h.y, '#ffffff', 6);
+  texts.push({ x: h.x, y: GY - 300 * S, t: 'BONK! +3', life: 1.2, col: GOLD });
+  if (z.bonks >= BONKS_TO_WIN) { // defeated: it falls asleep, snoring
+    z.score += 10; z.wins++; z.mode = 'sleep'; z.modeT = 0; z.snoreT = 1;
+    const [x0, x1] = zoneX(z);
+    texts.push({ x: (x0 + x1) / 2, y: H * .3, t: 'You defeated the Basilisk!', sub: '+10 ⚡', life: 3, col: GOLD, big: true, maxW: (x1 - x0) * .92 });
+    burst((x0 + x1) / 2, H * .35, GOLD, 25, 1.5); burst((x0 + x1) / 2, H * .35, '#7dff8a', 15, 1.5);
+    setTimeout(() => sfx('win'), 250);
+  } else { z.mode = 'bonked'; z.modeT = 0; }
+}
+
+function startGame() {
+  if (!ac) ac = new AudioContext();
+  ac.resume();
+  recStart(canvas, ac, [gameSong, winnerSong]); // record this round (see shared/recorder.js)
+  stopMusic(); startMusic();
+  makeZones(); paintChamber(); particles = []; texts = []; gt = 0;
+  $('#menu').classList.add('hidden'); $('#end').classList.add('hidden');
+  state = 'count'; countdown = 3.99; lastBeep = 4;
+}
+let lastBeep = 4;
+
+function endGame() {
+  recStop();
+  state = 'end'; stopMusic(); sfx('end'); playWinnerSong();
+  const best = Math.max(...zones.map(z => z.score)), winners = zones.filter(z => z.score === best);
+  $('#endTitle').textContent = zones.length === 1 ? `${zones[0].face.name}, Basilisk Hero!`
+    : winners.length === 2 ? 'A tie! Two brave heroes!' : `${winners[0].face.name} beat the Basilisk!`;
+  $('#trophy').innerHTML = winners.map(z => `<div class="cup">${CUP}<div class="cupface">${kidImg(z.face, '#fff6c8')}</div></div>`).join('');
+  $('#result').innerHTML = zones.map(z =>
+    `<span style="color:${z.color}">${kidImg(z.face, z.color)} ${z.face.name} (${z.level.name}): <b>${z.score}</b> point${z.score === 1 ? '' : 's'}` +
+    ` · ${z.dodges} dodge${z.dodges === 1 ? '' : 's'} · ${z.bonksAll} ⚔️ bonk${z.bonksAll === 1 ? '' : 's'}` +
+    (z.wins ? ` · Basilisk asleep ${z.wins}× 😴` : '') + `</span>`).join('<br>');
+  $('#end').classList.remove('hidden');
+}
+const CUP = `<svg viewBox="0 0 200 240"><defs><linearGradient id="gold" x1="0" x2="1">
+  <stop offset="0" stop-color="#8a5a00"/><stop offset=".35" stop-color="#fff1b0"/><stop offset=".6" stop-color="#f5c542"/>
+  <stop offset="1" stop-color="#8a5a00"/></linearGradient></defs>
+  <path d="M48 35 C5 35 5 105 62 112" fill="none" stroke="url(#gold)" stroke-width="12"/>
+  <path d="M152 35 C195 35 195 105 138 112" fill="none" stroke="url(#gold)" stroke-width="12"/>
+  <path d="M38 20 H162 C162 105 132 135 100 140 C68 135 38 105 38 20Z" fill="url(#gold)"/>
+  <rect x="90" y="138" width="20" height="38" fill="url(#gold)"/>
+  <path d="M62 176 H138 L150 202 H50Z" fill="url(#gold)"/>
+  <rect x="36" y="202" width="128" height="30" rx="5" fill="#7f0909" stroke="#f5c542" stroke-width="3"/>
+  <text x="100" y="223" text-anchor="middle" font-family="Cinzel, Georgia, serif" font-weight="800" font-size="17"
+    fill="#f7e7b0">⚡ CHAMPION ⚡</text></svg>`;
+function toMenu() {
+  recCancel();
+  state = 'menu'; zones = []; texts = []; particles = []; stopMusic(); stopWinnerSong();
+  $('#end').classList.add('hidden'); $('#menu').classList.remove('hidden');
+}
+
+$('#start').onclick = startGame;
+document.querySelector('.again').onclick = startGame;
+$('#toMenu').onclick = toMenu;
+addEventListener('keydown', e => {
+  if (e.code.startsWith('Arrow')) e.preventDefault();
+  if (e.repeat) return;
+  keys.add(e.code);
+  if (e.code === 'Space' && state !== 'play' && state !== 'count') startGame();
+  if (e.code === 'Escape') toMenu();
+  if (e.code === 'KeyH') location.href = '../../';
+  if (e.code === 'KeyC') { const l = nextLook(); markLook && markLook(); status('📷 Camera: ' + l.name); setTimeout(() => status(''), 1500); }
+  if (e.code === 'KeyM') { musicOn = !musicOn; if (musicOn && (state === 'play' || state === 'count')) startMusic(); else { stopMusic(); stopWinnerSong(); } }
+  if (e.code === 'KeyF') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+  if ((state === 'play' || state === 'count') && zones.length) {
+    if (e.code === 'ArrowUp' && !swordOut(zones[0])) startJump(zones[0]);
+    if (e.code === 'KeyW' && !swordOut(zones[1] || zones[0])) startJump(zones[1] || zones[0]);
+    if (e.code === 'KeyZ') trySwing(zones[0]);
+    if (e.code === 'KeyX') trySwing(zones[1] || zones[0]);
+  }
+});
+addEventListener('keyup', e => keys.delete(e.code));
+addEventListener('blur', () => keys.clear());
+addEventListener('mousemove', e => { // test sword: a fast mouse move in her half = a swing
+  const now = performance.now(), o = mouse;
+  if (o && now - o.t < 200) {
+    const sp = Math.hypot(e.clientX - o.x, e.clientY - o.y) / Math.max(1, now - o.t) * 1000;
+    if (sp > 1300 && zones.length) trySwing(zones.length === 1 ? zones[0] : zones[e.clientX < W / 2 ? 0 : 1]);
+  }
+  mouse = { x: e.clientX, y: e.clientY, t: now };
+});
+
+// ---------- update ----------
+function setMode(z, m) { z.mode = m; z.modeT = 0; }
+function update(dt) {
+  if (state === 'count') {
+    countdown -= dt;
+    const n = Math.ceil(countdown);
+    if (n < lastBeep) { lastBeep = n; sfx(n > 0 ? 'beep' : 'go'); }
+    if (countdown <= 0) { state = 'play'; timeLeft = ROUND; }
+  } else if (state === 'play') {
+    timeLeft -= dt; gt += dt;
+    if (timeLeft <= 0) { timeLeft = 0; endGame(); }
+  }
+  if (zones.length) readBodies(dt);
+  const keyDuck = new Map();
+  if (zones.length) for (const { z, d } of readKeys()) if (d) keyDuck.set(z, true);
+
+  for (const z of zones) {
+    const L = z.level, [x0, x1] = zoneX(z), zw = x1 - x0;
+    // where she stands: follows her body, slowly, inside the middle of her half
+    const want = z.bodyX != null && z.seenT < 1 ? clamp(z.bodyX, x0 + zw * 0.32, x1 - zw * 0.32) : (x0 + x1) / 2;
+    z.cx += (want - z.cx) * (1 - Math.exp(-dt * 3));
+    if (z.jumpT >= 0) { z.jumpT += dt; if (z.jumpT > JUMP_TIME) z.jumpT = -1; }
+    const inAir = z.jumpT >= 0;
+    const duckWant = inAir || swordOut(z) ? 0 : Math.max(keyDuck.get(z) ? 1 : 0, Math.min(1, z.duckBody));
+    z.duck += (duckWant - z.duck) * (1 - Math.exp(-dt * 14));
+    if (state === 'play') {
+      if (inAir && z.jumpT > 0.05) z.lastJump = gt;
+      if (z.duck > 0.8 || z.duckBody >= 1) z.lastDuck = gt;
+    }
+    z.ouch = Math.max(0, z.ouch - dt); z.cheer = Math.max(0, z.cheer - dt);
+    z.swingA = Math.max(0, z.swingA - dt); z.swingCd = Math.max(0, z.swingCd - dt);
+    z.tailIn = Math.min(1, z.tailIn + dt * 2);
+
+    if (state === 'play') {
+      z.modeT += dt;
+      if (z.mode === 'fight') {
+        z.spawnT -= dt;
+        const alive = z.things.some(t => !t.done);
+        if (z.moves >= L.tired && !z.things.length && timeLeft > LOWER + 2) { // tired: head down, target on the nose
+          setMode(z, 'tired'); z.moves = 0; sfx('yawn');
+        } else if (z.moves < L.tired || z.things.length === 0) {
+          const busy = L.single ? z.things.length > 0 : (alive && gt + L.warn < z.lastArrive + L.apart);
+          if (z.spawnT <= 0 && !busy && z.moves + z.things.filter(t => !t.done).length < L.tired && timeLeft > L.warn + 0.4) {
+            if (spawn(z)) z.spawnT = rand(...L.gap) + (L.single ? 0 : L.warn * 0.3);
+          }
+        }
+      } else if (z.mode === 'tired' && z.modeT > LOWER + TIRED_TIME) {
+        setMode(z, 'rise'); sfx('yawn');
+        texts.push({ x: headPose(z, 0).x, y: GY - 200 * S, t: 'Yawn… awake!', life: 1.3, col: '#c8ffb0', small: true });
+      } else if (z.mode === 'bonked' && z.modeT > 1.3) setMode(z, 'rise');
+      else if (z.mode === 'sleep') {
+        if ((z.snoreT -= dt) <= 0) { z.snoreT = 1.6; sfx('snore'); }
+        if (z.modeT > 5) {
+          setMode(z, 'rise'); z.bonks = 0; z.size = 1; sfx('yawn');
+          texts.push({ x: (x0 + x1) / 2, y: H * .3, t: 'It woke up! Again! 🐍', life: 1.8, col: '#7dff8a', small: true, maxW: zw * .9 });
+        }
+      } else if (z.mode === 'rise' && z.modeT > 0.8) { setMode(z, 'fight'); z.spawnT = 0.6; }
+    }
+
+    const home = headHome(z);
+    for (const t of z.things) {
+      if (!t.done) {
+        t.x = z.cx + t.dir * t.v * (t.arrive - gt);
+        if (state === 'play' && gt >= t.arrive + L.late) judge(z, t);
+      } else if (t.high) { // the head goes back home, up high (over her head)
+        if (!t.back) { t.back = true; t.backT = 0; t.y0 = headY(z, t); }
+        t.backT += dt; t.x += t.dir * t.v * 1.3 * dt;
+        if (t.dir > 0 ? t.x >= home.x : t.x <= home.x) t.gone = true;
+      } else { // the tail keeps sliding, then fades away; the resting tail comes back
+        t.x -= t.dir * t.v * dt; t.fade -= dt * 2.2;
+        if (t.fade <= 0) { t.gone = true; z.tailIn = 0; }
+      }
+    }
+    z.things = z.things.filter(t => !t.gone);
+  }
+  if (state === 'end' && Math.random() < 0.5 && particles.length < MAX_PARTS) // golden confetti for the champion
+    particles.push({ x: rand(0, W), y: -10, vx: rand(-40, 40) * S, vy: rand(50, 150) * S, life: 3,
+      col: ['#f7c843', '#fff1b0', '#7dff8a', '#ffffff'][Math.floor(rand(0, 4))], r: rand(3, 7), g: 20 });
+  for (const p of particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += (p.g ?? 500) * S * dt; p.life -= dt; }
+  particles = particles.filter(p => p.life > 0);
+  for (const t of texts) { t.y -= (t.big ? 20 : 70) * S * dt; t.life -= dt; }
+  texts = texts.filter(t => t.life > 0);
+}
+
+// ---------- where the head is ----------
+const SWING_Y = () => GY - 200 * S; // head height: she must DUCK under it
+function headY(z, t) {
+  const home = headHome(z), p = clamp(Math.abs(t.x - home.x) / (110 * S), 0, 1);
+  return lerp(home.y, SWING_Y(), ease(p));
+}
+function headPose(z, now) {
+  const home = headHome(z), r = 50 * S * z.size;
+  const rest = { x: z.cx + z.side * 150 * S, y: GY - 40 * S };
+  let x = home.x, y = home.y + Math.sin(now * 2 + z.i) * 6 * S, face = z.glasses ? 'glasses' : z.bonks ? 'sleepy' : 'open', glow = 0;
+  if (z.mode === 'tired') { const p = ease(Math.min(1, z.modeT / LOWER)); x = lerp(home.x, rest.x, p); y = lerp(home.y, rest.y, p); face = p > .5 ? 'closed' : 'sleepy'; }
+  else if (z.mode === 'bonked' || z.mode === 'sleep') { x = rest.x; y = rest.y + Math.sin(now * 2) * 3 * S; face = 'closed'; }
+  else if (z.mode === 'rise') { const p = ease(Math.min(1, z.modeT / 0.8)); x = lerp(rest.x, home.x, p); y = lerp(rest.y, home.y, p); face = 'sleepy'; }
+  else {
+    const t = z.things.find(t => t.high);
+    if (t) {
+      if (!t.back) {
+        x = t.dir > 0 ? Math.min(t.x, home.x) : Math.max(t.x, home.x);
+        y = headY(z, { x });
+        if (gt < t.arrive) glow = 1;
+      } else {
+        x = t.x;
+        const up = lerp(t.y0, GY - 330 * S, clamp(t.backT / 0.2, 0, 1)), k = clamp(1 - Math.abs(x - home.x) / (120 * S), 0, 1);
+        y = lerp(up, home.y, k);
+      }
+    }
+  }
+  return { x, y, r, face, glow };
+}
+
+// ---------- the Chamber of Secrets (painted once into a hidden canvas) ----------
+let seed = 1;
+const srand = (a, b) => { seed = (seed * 16807) % 2147483647; return a + (seed / 2147483647) * (b - a); };
+function paintChamber() {
+  const c = bgx, n = zones.length || 1; seed = 11;
+  c.clearRect(0, 0, W, H);
+  for (let k = 0; k < n; k++) {
+    const x0 = k * W / n, x1 = (k + 1) * W / n, zw = x1 - x0, cx = (x0 + x1) / 2;
+    const bw = zw * 0.36, bl = cx - bw / 2, br = cx + bw / 2, top = H * 0.14, fb = H * 0.56;
+    c.save(); c.beginPath(); c.rect(x0, 0, zw, H); c.clip();
+    // ceiling + air
+    let g = c.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, 'rgba(8,26,22,.93)'); g.addColorStop(.5, 'rgba(16,44,36,.8)'); g.addColorStop(1, 'rgba(10,26,20,.85)');
+    c.fillStyle = g; c.fillRect(x0, 0, zw, H);
+    // side walls
+    c.fillStyle = 'rgba(30,62,50,.88)';
+    c.beginPath(); c.moveTo(x0, 0); c.lineTo(bl, top); c.lineTo(bl, fb); c.lineTo(x0, H); c.fill();
+    c.beginPath(); c.moveTo(x1, 0); c.lineTo(br, top); c.lineTo(br, fb); c.lineTo(x1, H); c.fill();
+    c.strokeStyle = 'rgba(200,255,220,.06)'; c.lineWidth = 2 * S;
+    for (let j = 1; j < 8; j++) {
+      c.beginPath(); c.moveTo(x0, j / 8 * H); c.lineTo(bl, top + (fb - top) * j / 8);
+      c.moveTo(x1, j / 8 * H); c.lineTo(br, top + (fb - top) * j / 8); c.stroke();
+    }
+    // back wall with stone blocks
+    c.fillStyle = '#2f5546'; c.fillRect(bl, top, bw, fb - top);
+    c.strokeStyle = 'rgba(0,0,0,.18)'; c.lineWidth = 1.5 * S;
+    for (let y = top, row = 0; y < fb; y += 22 * S, row++) {
+      c.beginPath(); c.moveTo(bl, y); c.lineTo(br, y); c.stroke();
+      for (let x = bl + (row % 2) * 20 * S; x < br; x += 40 * S) { c.beginPath(); c.moveTo(x, y); c.lineTo(x, y + 22 * S); c.stroke(); }
+    }
+    // Salazar Slytherin's big stone face (calm, eyes closed, long beard)
+    const fx = cx, fh = (fb - top) * 0.55, fy = top + fh * 0.62, fw = Math.min(bw * 0.62, fh * 0.82);
+    c.fillStyle = 'rgba(0,0,0,.25)'; c.beginPath(); c.ellipse(fx, fy + fh * .25, fw * .72, fh * .9, 0, 0, 7); c.fill(); // niche
+    c.fillStyle = '#8fa89a'; // beard
+    c.beginPath(); c.moveTo(fx - fw * .42, fy + fh * .1);
+    c.quadraticCurveTo(fx - fw * .45, fb - 8 * S, fx - fw * .12, fb); c.lineTo(fx + fw * .12, fb);
+    c.quadraticCurveTo(fx + fw * .45, fb - 8 * S, fx + fw * .42, fy + fh * .1); c.fill();
+    c.strokeStyle = 'rgba(60,80,70,.5)'; c.lineWidth = 2 * S;
+    for (let j = -3; j <= 3; j++) { c.beginPath(); c.moveTo(fx + j * fw * .1, fy + fh * .4); c.quadraticCurveTo(fx + j * fw * .12, fy + fh * .8, fx + j * fw * .05, fb - 4 * S); c.stroke(); }
+    g = c.createLinearGradient(fx - fw / 2, 0, fx + fw / 2, 0);
+    g.addColorStop(0, '#7b9487'); g.addColorStop(.5, '#b4c8bb'); g.addColorStop(1, '#7b9487');
+    c.fillStyle = g; c.beginPath(); c.ellipse(fx, fy, fw / 2, fh / 2, 0, 0, 7); c.fill();
+    c.strokeStyle = '#4c6458'; c.lineCap = 'round'; c.lineWidth = fw * .06;
+    c.beginPath(); c.moveTo(fx - fw * .36, fy - fh * .2); c.quadraticCurveTo(fx - fw * .2, fy - fh * .3, fx - fw * .06, fy - fh * .2);
+    c.moveTo(fx + fw * .36, fy - fh * .2); c.quadraticCurveTo(fx + fw * .2, fy - fh * .3, fx + fw * .06, fy - fh * .2); c.stroke(); // brows
+    c.lineWidth = fw * .035;
+    c.beginPath(); c.arc(fx - fw * .2, fy - fh * .1, fw * .1, .2, Math.PI - .2); c.moveTo(fx + fw * .3, fy - fh * .06);
+    c.arc(fx + fw * .2, fy - fh * .1, fw * .1, .2, Math.PI - .2); c.stroke(); // closed, sleepy eyes
+    c.beginPath(); c.moveTo(fx, fy - fh * .12); c.lineTo(fx - fw * .05, fy + fh * .12); c.lineTo(fx + fw * .04, fy + fh * .14); c.stroke(); // nose
+    c.fillStyle = '#9fb6a8'; // moustache
+    c.beginPath(); c.ellipse(fx - fw * .14, fy + fh * .24, fw * .17, fh * .06, .25, 0, 7); c.ellipse(fx + fw * .14, fy + fh * .24, fw * .17, fh * .06, -.25, 0, 7); c.fill();
+    c.strokeStyle = '#4c6458'; c.lineWidth = fw * .025; c.beginPath(); c.arc(fx, fy + fh * .26, fw * .1, .4, Math.PI - .4); c.stroke(); // a little smile
+    // floor with stone tiles
+    g = c.createLinearGradient(0, fb, 0, H);
+    g.addColorStop(0, '#3e6a57'); g.addColorStop(1, '#22402f');
+    c.fillStyle = g; c.beginPath(); c.moveTo(bl, fb); c.lineTo(br, fb); c.lineTo(x1, H); c.lineTo(x0, H); c.fill();
+    c.strokeStyle = 'rgba(0,0,0,.2)'; c.lineWidth = 1.5 * S;
+    for (let j = 0; j <= 8; j++) { c.beginPath(); c.moveTo(lerp(bl, br, j / 8), fb); c.lineTo(lerp(x0, x1, j / 8), H); c.stroke(); }
+    for (let q = 1; q < 7; q++) { const y = fb + (H - fb) * (q / 7) ** 1.8; c.beginPath(); c.moveTo(x0, y); c.lineTo(x1, y); c.stroke(); }
+    // green water channels on both sides
+    for (const s of [-1, 1]) {
+      const a = s < 0 ? bl : br, w = bw * .14 * -s, e = s < 0 ? x0 : x1;
+      g = c.createLinearGradient(0, fb, 0, H);
+      g.addColorStop(0, 'rgba(40,170,120,.75)'); g.addColorStop(1, 'rgba(20,120,95,.85)');
+      c.fillStyle = g; c.beginPath(); c.moveTo(a, fb); c.lineTo(a + w, fb); c.lineTo(e - s * zw * .2, H); c.lineTo(e, H); c.fill();
+      c.strokeStyle = 'rgba(190,255,220,.25)'; c.lineWidth = 2 * S;
+      for (let j = 0; j < 7; j++) { const q = srand(.1, .95), y = fb + (H - fb) * q, xa = lerp(a, e, q), xb = lerp(a + w, e - s * zw * .2, q); c.beginPath(); c.moveTo(lerp(xa, xb, .2), y); c.lineTo(lerp(xa, xb, .55), y); c.stroke(); }
+    }
+    // soft light on the middle of the floor (kid-friendly, not dark)
+    g = c.createRadialGradient(cx, GY, 0, cx, GY, zw * .5);
+    g.addColorStop(0, 'rgba(200,255,210,.18)'); g.addColorStop(1, 'rgba(200,255,210,0)');
+    c.fillStyle = g; c.fillRect(x0, 0, zw, H);
+    // pillars with carved snakes, snake heads on top, green lamps
+    for (const f of [0.12, 0.3, 0.52, 0.8]) for (const s of [-1, 1]) {
+      const bx = s < 0 ? lerp(bl, x0 - zw * .03, f) : lerp(br, x1 + zw * .03, f);
+      const by = lerp(fb, H * 1.02, f), ty = lerp(top, -H * .05, f), pw = zw * (0.025 + 0.08 * f);
+      g = c.createLinearGradient(bx - pw / 2, 0, bx + pw / 2, 0);
+      g.addColorStop(0, '#2c4a3e'); g.addColorStop(.45, '#6f9283'); g.addColorStop(1, '#2c4a3e');
+      c.fillStyle = g; c.fillRect(bx - pw / 2, ty, pw, by - ty);
+      c.fillStyle = '#5b7e70'; c.fillRect(bx - pw * .65, by - pw * .3, pw * 1.3, pw * .3); c.fillRect(bx - pw * .65, ty + pw * .9, pw * 1.3, pw * .25);
+      c.strokeStyle = '#3f8a55'; c.lineWidth = pw * .16; c.beginPath(); // carved snake wrapping the pillar
+      for (let q = 0; q <= 30; q++) { const y = lerp(by - pw * .4, ty + pw * 1.4, q / 30), x = bx + Math.sin(q * .9) * pw * .38; q ? c.lineTo(x, y) : c.moveTo(x, y); }
+      c.stroke();
+      c.fillStyle = '#4a9a60'; c.beginPath(); c.ellipse(bx, ty + pw * .55, pw * .5, pw * .38, 0, 0, 7); c.fill(); // stone snake head
+      c.fillStyle = '#e9ffe0'; c.beginPath(); c.arc(bx - pw * .18, ty + pw * .48, pw * .1, 0, 7); c.arc(bx + pw * .18, ty + pw * .48, pw * .1, 0, 7); c.fill();
+      c.fillStyle = '#123'; c.beginPath(); c.arc(bx - pw * .18, ty + pw * .5, pw * .05, 0, 7); c.arc(bx + pw * .18, ty + pw * .5, pw * .05, 0, 7); c.fill();
+      if (f > .2 && f < .6) { // green lamp glow
+        const ly = lerp(by, ty, .5), lr = pw * 2.6;
+        g = c.createRadialGradient(bx, ly, 0, bx, ly, lr);
+        g.addColorStop(0, 'rgba(170,255,190,.55)'); g.addColorStop(.3, 'rgba(80,230,130,.2)'); g.addColorStop(1, 'rgba(60,200,110,0)');
+        c.fillStyle = g; c.fillRect(bx - lr, ly - lr, lr * 2, lr * 2);
+        c.fillStyle = '#d8ffe0'; c.beginPath(); c.ellipse(bx, ly, pw * .14, pw * .28, 0, 0, 7); c.fill();
+      }
+    }
+    c.restore();
+  }
+}
+addEventListener('resize', resize); resize();
+
+// ---------- pictures made once (no shadow blur in the frame loop) ----------
+function makeGlow(size, stops) {
+  const c = document.createElement('canvas'); c.width = c.height = size;
+  const g = c.getContext('2d'), r = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  stops.forEach(([o, col]) => r.addColorStop(o, col)); g.fillStyle = r; g.fillRect(0, 0, size, size);
+  return c;
+}
+const warnGlow = makeGlow(128, [[0, 'rgba(255,250,170,.9)'], [.35, 'rgba(255,220,80,.4)'], [1, 'rgba(255,200,60,0)']]);
+const TARGET = (() => { // the glowing target on its nose
+  const c = makeGlow(160, [[0, 'rgba(255,240,150,.9)'], [.5, 'rgba(255,200,60,.35)'], [1, 'rgba(255,200,60,0)']]), g = c.getContext('2d');
+  g.lineWidth = 7;
+  for (const [r, col] of [[46, '#ff5a4a'], [32, '#fff3c0'], [18, '#ff5a4a']]) { g.strokeStyle = col; g.beginPath(); g.arc(80, 80, r, 0, 7); g.stroke(); }
+  g.fillStyle = GOLD; g.beginPath(); g.arc(80, 80, 8, 0, 7); g.fill();
+  return c;
+})();
+// The Basilisk's head, facing right. Cute: round head, big eyes, pink cheeks, a smile, a little red crest.
+const HR = 70, HCX = 110, HCY = 108;
+function makeHead(face) {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 210;
+  const g = c.getContext('2d'), r = HR; g.translate(HCX, HCY); g.lineCap = 'round'; g.lineJoin = 'round';
+  g.fillStyle = '#e8463c'; // crest
+  for (const [x, y, s] of [[-.75, -.6, .3], [-.45, -.82, .34], [-.1, -.9, .3]]) { g.beginPath(); g.ellipse(x * r, y * r, s * r * .6, s * r, -.4, 0, 7); g.fill(); }
+  g.fillStyle = '#2f7a34'; g.beginPath(); g.ellipse(0, 0, r * 1.25 + 5, r * .88 + 5, 0, 0, 7); g.fill(); // outline
+  g.fillStyle = '#5cc85a'; g.beginPath(); g.ellipse(0, 0, r * 1.25, r * .88, 0, 0, 7); g.fill();
+  g.fillStyle = '#d8f08a'; g.beginPath(); g.ellipse(r * .15, r * .45, r * 1.0, r * .36, 0, 0, 7); g.fill(); // light chin
+  g.fillStyle = '#3f9a44'; for (const [x, y, s] of [[-.8, -.1, .12], [-.55, -.45, .1], [-.95, .25, .09], [.3, -.72, .08]]) { g.beginPath(); g.arc(x * r, y * r, s * r, 0, 7); g.fill(); }
+  g.fillStyle = '#1f4d22'; g.beginPath(); g.arc(r * 1.05, -r * .1, r * .06, 0, 7); g.arc(r * .9, -r * .14, r * .06, 0, 7); g.fill(); // nostrils
+  g.fillStyle = '#ff9fc8'; g.beginPath(); g.ellipse(r * .55, r * .2, r * .17, r * .1, 0, 0, 7); g.fill(); // cheek
+  g.strokeStyle = '#1f4d22'; g.lineWidth = r * .07; g.beginPath(); g.arc(r * .75, r * .12, r * .32, .5, 1.9); g.stroke(); // smile
+  const eyes = [[.45, -.38, .3], [-.05, -.42, .27]];
+  if (face === 'open' || face === 'sleepy') {
+    for (const [x, y, s] of eyes) {
+      g.fillStyle = '#fff'; g.beginPath(); g.arc(x * r, y * r, s * r, 0, 7); g.fill();
+      g.strokeStyle = '#1f4d22'; g.lineWidth = 3; g.stroke();
+      g.fillStyle = '#1b2a10'; g.beginPath(); g.arc(x * r + s * r * .2, y * r + s * r * .1, s * r * .55, 0, 7); g.fill();
+      g.fillStyle = '#fff'; g.beginPath(); g.arc(x * r + s * r * .35, y * r - s * r * .15, s * r * .2, 0, 7); g.fill();
+      if (face === 'sleepy') { g.fillStyle = '#5cc85a'; g.beginPath(); g.arc(x * r, y * r, s * r + 2, Math.PI, 0); g.fill(); g.strokeStyle = '#1f4d22'; g.beginPath(); g.moveTo(x * r - s * r, y * r); g.lineTo(x * r + s * r, y * r); g.stroke(); }
+    }
+    if (face === 'open') { g.strokeStyle = '#ff5f8f'; g.lineWidth = 5; g.beginPath(); g.moveTo(r * 1.2, r * .2); g.lineTo(r * 1.5, r * .22); g.lineTo(r * 1.62, r * .12); g.moveTo(r * 1.5, r * .22); g.lineTo(r * 1.62, r * .32); g.stroke(); } // little tongue
+  } else if (face === 'closed') {
+    g.strokeStyle = '#1f4d22'; g.lineWidth = r * .08;
+    for (const [x, y, s] of eyes) { g.beginPath(); g.arc(x * r, y * r - s * r * .2, s * r * .7, .3, Math.PI - .3); g.stroke(); }
+  } else if (face === 'glasses') { // dark sunglasses: its look is harmless 😎
+    g.fillStyle = '#111'; g.strokeStyle = '#111'; g.lineWidth = 6;
+    for (const [x, y, s] of eyes) { g.beginPath(); g.roundRect(x * r - s * r * 1.1, y * r - s * r * .75, s * r * 2.2, s * r * 1.5, s * r * .6); g.fill(); }
+    g.beginPath(); g.moveTo(-.05 * r + .3 * r, -.45 * r); g.lineTo(.45 * r - .33 * r, -.45 * r); g.moveTo(-.05 * r - .3 * r, -.45 * r); g.lineTo(-r * .85, -r * .35); g.stroke();
+    g.strokeStyle = 'rgba(255,255,255,.6)'; g.lineWidth = 4;
+    for (const [x, y, s] of eyes) { g.beginPath(); g.moveTo(x * r - s * r * .6, y * r - s * r * .3); g.lineTo(x * r - s * r * .1, y * r - s * r * .55); g.stroke(); }
+  }
+  return c;
+}
+const HEADS = { open: makeHead('open'), sleepy: makeHead('sleepy'), closed: makeHead('closed'), glasses: makeHead('glasses') };
+
+// ---------- drawing the Basilisk ----------
+const BODY = '#55b84f', DARK = '#2a6b2f', BELLY = '#d3ec86';
+// a snake body along a line of points, thick at the start, thin at the end (a few chunks, plain strokes)
+function snake(pts, w0, w1, col = BODY) {
+  const n = 4, seg = Math.ceil((pts.length - 1) / n);
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  const pass = (color, f, extra, dy, dash) => {
+    ctx.strokeStyle = color; if (dash) ctx.setLineDash(dash);
+    for (let i = 0; i < n; i++) {
+      const a = i * seg, b = Math.min(pts.length - 1, (i + 1) * seg); if (a >= b) break;
+      const w = lerp(w0, w1, (i + .5) / n); ctx.lineWidth = w * f + extra;
+      ctx.beginPath(); ctx.moveTo(pts[a][0], pts[a][1] + w * dy);
+      for (let j = a + 1; j <= b; j++) ctx.lineTo(pts[j][0], pts[j][1] + w * dy);
+      ctx.stroke();
+    }
+    if (dash) ctx.setLineDash([]);
+  };
+  pass(DARK, 1, 5 * S, 0);
+  pass(col, 1, 0, 0);
+  pass(BELLY, .32, 0, .25);
+  pass('rgba(40,110,45,.7)', .22, 0, -.15, [10 * S, 22 * S]);
+}
+function drawSnakeBack(z, now) { // the long body behind her, the coils, the resting tail
+  const s = z.size, cxl = coilX(z), side = z.side, [x0, x1] = zoneX(z);
+  const far = side > 0 ? x0 - 60 * S : x1 + 60 * S;
+  const breathe = Math.sin(now * 1.5 + z.i) * 3 * S * (z.mode === 'sleep' ? 2 : 1);
+  // body along the back of the hall, toward the tail side
+  const back = [];
+  for (let q = 0; q <= 16; q++) { const u = q / 16; back.push([lerp(cxl - side * 50 * S * s, far, u), GY - 40 * S - 45 * S * Math.sin(u * Math.PI) + Math.sin(u * 9 + now) * 4 * S]); }
+  snake(back, 38 * S * s, 30 * S * s, '#4aa647');
+  // resting tail on the floor at the far side (hidden while the tail is out sweeping)
+  if (!z.things.some(t => !t.high)) {
+    ctx.globalAlpha = z.tailIn;
+    snake(tailPts(z, tailRest(z), now), 30 * S, 6 * S);
+    ctx.globalAlpha = 1;
+  }
+  // coils (three rings, the top one smaller) — they go up and down a little: breathing
+  for (const [dy, rx, ry, w] of [[-22, 95, 26, 34], [-56, 78, 22, 30], [-88, 58, 18, 26]]) {
+    const y = GY + dy * S * s + breathe * (dy / -88);
+    for (const [col, ex] of [[DARK, 5 * S], [BODY, 0]]) { ctx.strokeStyle = col; ctx.lineWidth = w * S * s + ex; ctx.beginPath(); ctx.ellipse(cxl, y, rx * S * s, ry * S * s, 0, 0, 7); ctx.stroke(); }
+    ctx.strokeStyle = BELLY; ctx.lineWidth = w * S * s * .3; ctx.beginPath(); ctx.ellipse(cxl, y + 4 * S, rx * S * s, ry * S * s, 0, .3, Math.PI - .3); ctx.stroke();
+  }
+}
+function tailPts(z, tipX, now) { // from outside her half (the tail side) to the tip, low on the floor
+  const [x0, x1] = zoneX(z), from = z.side > 0 ? x0 - 50 * S : x1 + 50 * S, pts = [];
+  for (let q = 0; q <= 14; q++) { const u = q / 14; pts.push([lerp(from, tipX, u), GY - 26 * S + Math.sin(u * 7 - now * 9) * 5 * S * u - (q === 14 ? 10 * S : 0)]); }
+  return pts;
+}
+function drawSnakeFront(z, now) { // the attacking tail, the neck and the head (in front of her)
+  const L = z.level;
+  for (const t of z.things) {
+    if (t.high) continue;
+    const rest = tailRest(z), tip = t.done ? t.x : (t.dir > 0 ? Math.min(t.x, rest) : Math.max(t.x, rest));
+    ctx.globalAlpha = Math.max(0, t.fade);
+    snake(tailPts(z, tip, now), 34 * S, 7 * S);
+    ctx.globalAlpha = 1;
+    if (!t.done && gt < t.arrive) glowAt(tip, GY - 34 * S, 70 * S, now);
+  }
+  const h = headPose(z, now), cxl = coilX(z), s = z.size, side = z.side;
+  // neck: from the top coil up to the back of the head
+  const nx = h.x + side * h.r * .9, ny = h.y + h.r * .2, sxp = cxl, syp = GY - 90 * S * s;
+  const cy = Math.min(syp, ny) - 70 * S, pts = [];
+  for (let q = 0; q <= 12; q++) { const u = q / 12, a = (1 - u) * (1 - u), b = 2 * u * (1 - u), c = u * u; pts.push([a * sxp + b * (sxp + nx) / 2 + c * nx, a * syp + b * cy + c * ny]); }
+  snake(pts, 32 * S * s, 30 * S * s);
+  if (h.glow) glowAt(h.x, h.y, h.r * 2.2, now);
+  const k = h.r / HR;
+  ctx.save(); ctx.translate(h.x, h.y); ctx.scale(-side * k, k);
+  ctx.drawImage(HEADS[h.face], -HCX, -HCY); ctx.restore();
+  // target on the nose (tired), dizzy stars (bonked), Zzz (asleep)
+  const nose = { x: h.x - side * h.r * .95, y: h.y - h.r * .05 };
+  if (z.mode === 'tired' && z.modeT >= LOWER) {
+    const p = 1 + .12 * Math.sin(now * 9), r = h.r * 1.1 * p;
+    ctx.globalCompositeOperation = 'lighter'; ctx.drawImage(TARGET, nose.x - r, nose.y - r, r * 2, r * 2); ctx.globalCompositeOperation = 'source-over';
+  }
+  if (z.mode === 'bonked') stars(h.x, h.y - h.r * 1.1, h.r, now);
+  if (z.mode === 'sleep' || (z.mode === 'tired' && z.modeT > LOWER)) {
+    ctx.fillStyle = '#cfe8ff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (let j = 0; j < 3; j++) {
+      const q = (now * .6 + j / 3) % 1;
+      ctx.globalAlpha = Math.sin(q * Math.PI); ctx.font = `800 ${(18 + q * 22) * S}px "Cinzel", Georgia, serif`;
+      ctx.fillText('z', h.x + side * h.r * .2 + Math.sin(q * 6) * 10 * S, h.y - h.r - q * 90 * S);
+    }
+    ctx.globalAlpha = 1;
+  }
+}
+function glowAt(x, y, r, now) {
+  const p = r * (1 + .25 * Math.sin(now * 12));
+  ctx.globalCompositeOperation = 'lighter'; ctx.drawImage(warnGlow, x - p, y - p, p * 2, p * 2); ctx.globalCompositeOperation = 'source-over';
+}
+function stars(x, y, r, now) {
+  ctx.fillStyle = GOLD; ctx.font = `${r * .55}px serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (let j = 0; j < 3; j++) { const a = now * 5 + j * 2.1; ctx.fillText('★', x + Math.cos(a) * r * .9, y + Math.sin(a) * r * .3); }
+}
+
+// ---------- drawing her character ----------
+function drawFallbackFace(x, y, r) {
+  ctx.fillStyle = '#f6d2b0'; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+  ctx.fillStyle = '#2a1a10';
+  ctx.beginPath(); ctx.arc(x - r * .33, y - r * .1, r * .1, 0, 7); ctx.arc(x + r * .33, y - r * .1, r * .1, 0, 7); ctx.fill();
+  ctx.strokeStyle = '#2a1a10'; ctx.lineWidth = r * .08;
+  ctx.beginPath(); ctx.arc(x, y + r * .15, r * .35, 0.3, Math.PI - 0.3); ctx.stroke();
+}
+// the Sword of Gryffindor: silver blade, gold guard, ruby on the end
+function drawSword(x, y, ang, len) {
+  const bw = 11 * S;
+  ctx.save(); ctx.translate(x, y); ctx.rotate(ang);
+  ctx.lineCap = 'round'; ctx.globalAlpha = .3; ctx.strokeStyle = '#e6f2ff'; ctx.lineWidth = bw * 2.6;
+  ctx.beginPath(); ctx.moveTo(len * .15, 0); ctx.lineTo(len * .95, 0); ctx.stroke(); ctx.globalAlpha = 1;
+  ctx.fillStyle = '#e8eef8'; ctx.strokeStyle = '#7c879a'; ctx.lineWidth = 1.5 * S;
+  ctx.beginPath(); ctx.moveTo(len * .1, -bw / 2); ctx.lineTo(len * .88, -bw * .4); ctx.lineTo(len, 0); ctx.lineTo(len * .88, bw * .4); ctx.lineTo(len * .1, bw / 2); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(len * .14, 0); ctx.lineTo(len * .85, 0); ctx.stroke();
+  ctx.fillStyle = '#e8c35a'; ctx.fillRect(len * .06, -bw * 1.7, bw * .9, bw * 3.4);
+  ctx.fillStyle = '#5a3418'; ctx.fillRect(-len * .14, -bw * .4, len * .2, bw * .8);
+  ctx.fillStyle = '#e8c35a'; ctx.beginPath(); ctx.arc(-len * .16, 0, bw * .75, 0, 7); ctx.fill();
+  ctx.fillStyle = '#e0303a'; ctx.beginPath(); ctx.arc(-len * .16, 0, bw * .45, 0, 7); ctx.fill();
+  ctx.restore();
+}
+function drawHero(z, now) {
+  const d = clamp(z.duck, 0, 1), side = z.side;
+  const lift = z.jumpT >= 0 ? Math.sin(Math.PI * z.jumpT / JUMP_TIME) * JUMP_H * S : 0;
+  const shake = z.ouch > 0 ? Math.sin(now * 55) * 10 * S * Math.min(1, z.ouch) : 0;
+  const x = z.cx + shake, feet = GY - lift;
+  ctx.fillStyle = 'rgba(0,0,0,.4)';
+  ctx.beginPath(); ctx.ellipse(z.cx, GY + 4 * S, (55 - lift / S * 0.2) * S, 10 * S, 0, 0, 7); ctx.fill();
+  const bodyH = (100 - 48 * d) * S, shY = feet - bodyH, bw = (88 + 30 * d) * S, tw = (46 + 16 * d) * S;
+  ctx.save(); ctx.translate(x, 0);
+  if (z.ouch > 0) { ctx.translate(0, feet); ctx.rotate(Math.sin(now * 30) * 0.08); ctx.translate(0, -feet); }
+  // the sword: both hands on it, held toward the Basilisk
+  let sword = null;
+  if (swordOut(z)) {
+    const up = -Math.PI / 2 - side * 0.5, down = side > 0 ? 0.5 : -Math.PI - 0.5;
+    let ang = -Math.PI / 2 + side * 0.35;
+    if (z.armSeen < 0.5 && z.armAng != null) ang = z.armAng;
+    if (z.swingA > 0) ang = lerp(up, down, ease(1 - z.swingA / 0.3));
+    sword = { gx: side * 18 * S, gy: shY + 42 * S, ang, up };
+  }
+  ctx.strokeStyle = '#2b2140'; ctx.lineCap = 'round'; ctx.lineWidth = 16 * S;
+  for (const s of [-1, 1]) {
+    ctx.beginPath(); ctx.moveTo(s * tw * .45, shY + 12 * S);
+    if (sword) ctx.lineTo(sword.gx, sword.gy);
+    else if (lift > 10 * S) ctx.lineTo(s * 55 * S, shY - 45 * S);
+    else if (d > 0.4) ctx.lineTo(s * 26 * S, shY - 40 * S);
+    else ctx.lineTo(s * 50 * S, shY + 55 * S + (z.ouch > 0 ? Math.sin(now * 40 + s) * 15 * S : 0));
+    ctx.stroke();
+  }
+  // robe, scarf in her colour + gold, shoes
+  ctx.fillStyle = '#2b2140';
+  ctx.beginPath(); ctx.moveTo(-tw / 2, shY); ctx.lineTo(tw / 2, shY); ctx.lineTo(bw / 2, feet); ctx.lineTo(-bw / 2, feet); ctx.fill();
+  ctx.strokeStyle = z.color; ctx.lineWidth = 5 * S;
+  ctx.beginPath(); ctx.moveTo(0, shY + 18 * S); ctx.lineTo(0, feet); ctx.stroke();
+  ctx.fillStyle = z.color; ctx.fillRect(-tw / 2 - 2 * S, shY - 4 * S, tw + 4 * S, 12 * S);
+  ctx.fillStyle = '#f7c843'; ctx.fillRect(-tw / 2 - 2 * S, shY + 2 * S, tw + 4 * S, 3 * S);
+  ctx.fillStyle = z.color; ctx.fillRect(-side * tw * .3, shY + 4 * S, 9 * S, 40 * S); // scarf end
+  ctx.fillStyle = '#111';
+  for (const s of [-1, 1]) { ctx.beginPath(); ctx.ellipse(s * bw * .28, feet, 16 * S, 8 * S, 0, 0, 7); ctx.fill(); }
+  // head = her face, with a little wizard hat
+  const r = 40 * S, hy = shY - r + 2 * S;
+  drawFallbackFace(0, hy, r);
+  drawKidFace(ctx, z.face, 0, hy, r, z.color);
+  ctx.fillStyle = '#3a2a6a';
+  ctx.beginPath(); ctx.moveTo(-r * .95, hy - r * .7); ctx.lineTo(r * .95, hy - r * .7);
+  ctx.lineTo(r * .25, hy - r * 2); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#f7c843'; ctx.font = `${r * .5}px serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('★', r * .1, hy - r * 1.1);
+  if (sword) {
+    const len = 125 * S;
+    if (z.swingA > 0) { // swing trail: a bright arc
+      ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = .5; ctx.strokeStyle = '#fff6c8'; ctx.lineWidth = 22 * S;
+      const a0 = sword.up, a1 = sword.ang;
+      ctx.beginPath(); ctx.arc(sword.gx, sword.gy, len * .8, Math.min(a0, a1), Math.max(a0, a1)); ctx.stroke();
+      ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+    }
+    drawSword(sword.gx, sword.gy, sword.ang, len);
+    ctx.fillStyle = '#f6d2b0'; ctx.beginPath(); ctx.arc(sword.gx, sword.gy, 9 * S, 0, 7); ctx.fill(); // hands
+  }
+  ctx.restore();
+  if (z.ouch > 0) stars(x, hy - 40 * S, 50 * S, now);
+}
+
+// Big hint: "JUMP ⬆" / "DUCK ⬇" with a bar that runs out, or "SWING ⚔️" when the Basilisk is tired.
+function drawHint(z, now) {
+  const [x0, x1] = zoneX(z);
+  let word, col, left;
+  if (z.mode === 'tired') {
+    if (z.modeT < LOWER) return;
+    word = 'SWING ⚔️'; col = GOLD; left = clamp(1 - (z.modeT - LOWER) / TIRED_TIME, 0, 1);
+  } else if (z.mode === 'fight') {
+    const next = z.things.filter(t => !t.done).sort((a, b) => a.arrive - b.arrive)[0];
+    if (!next) return;
+    left = clamp((next.arrive - gt) / z.level.warn, 0, 1);
+    col = next.high ? '#6fd3ff' : '#7dff8a'; word = next.high ? 'DUCK ⬇' : 'JUMP ⬆';
+  } else return;
+  const pulse = 1 + 0.06 * Math.sin(now * 10);
+  ctx.save(); ctx.translate((x0 + x1) / 2, GY - 400 * S); ctx.scale(pulse, pulse);
+  const w = 320 * S, h = 96 * S;
+  ctx.fillStyle = 'rgba(10,24,20,.78)'; ctx.strokeStyle = col; ctx.lineWidth = 5 * S;
+  ctx.beginPath(); ctx.roundRect(-w / 2, -h / 2, w, h, h / 2); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = col; ctx.font = `900 ${54 * S}px "Cinzel Decorative", Georgia, serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(word, 0, 4 * S);
+  ctx.fillStyle = 'rgba(255,255,255,.2)'; ctx.fillRect(-w * .4, h / 2 + 10 * S, w * .8, 10 * S);
+  ctx.fillStyle = col; ctx.fillRect(-w * .4, h / 2 + 10 * S, w * .8 * left, 10 * S);
+  ctx.restore();
+}
+
+// a few green magic sparks floating in the hall (cheap)
+const motes = Array.from({ length: 16 }, () => ({ x: Math.random(), y: rand(0.15, 0.8), p: rand(0, 6.28), s: rand(0.3, 0.7) }));
+function drawMotes(t) {
+  ctx.fillStyle = '#b8ffcc';
+  for (const f of motes) {
+    ctx.globalAlpha = 0.25 + 0.5 * Math.abs(Math.sin(t * 1.5 + f.p));
+    ctx.beginPath(); ctx.arc(f.x * W + Math.sin(t * f.s + f.p) * 40 * S, f.y * H + Math.cos(t * f.s * 1.3 + f.p) * 25 * S, 2.5 * S, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function draw() {
+  const now = performance.now() / 1000;
+  ctx.fillStyle = '#07140f'; ctx.fillRect(0, 0, W, H);
+  if (video.readyState >= 2) { // the camera picture, faint, behind the chamber
+    ctx.save(); ctx.globalAlpha = 0.4; ctx.translate(W, 0); ctx.scale(-1, 1);
+    ctx.drawImage(video, 0, 0, W, H); ctx.restore();
+  }
+  ctx.drawImage(bg, 0, 0, W, H);
+  drawMotes(now);
+  drawCameraOver(ctx, video, W, H); // Camera setting: kids clearer
+
+  for (const z of zones) {
+    const [x0, x1] = zoneX(z), mx = (x0 + x1) / 2;
+    ctx.save(); ctx.beginPath(); ctx.rect(x0, 0, x1 - x0, H); ctx.clip();
+    drawSnakeBack(z, now);
+    drawHero(z, now);
+    drawSnakeFront(z, now);
+    if (state === 'play') drawHint(z, now);
+    ctx.restore();
+    // score + face + bonks (3 swords = the Basilisk falls asleep)
+    ctx.fillStyle = z.color; ctx.font = `800 ${70 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.fillText(z.score, mx + 40 * S, 18 * S);
+    drawFallbackFace(mx - 50 * S, 55 * S, 42 * S);
+    drawKidFace(ctx, z.face, mx - 50 * S, 55 * S, 42 * S, z.color);
+    ctx.font = `600 ${24 * S}px "Cinzel Decorative", Georgia, serif`; ctx.fillStyle = '#fff';
+    ctx.fillText(z.face.name + ' · ' + z.level.name, mx, 100 * S);
+    ctx.font = `${26 * S}px serif`;
+    for (let j = 0; j < BONKS_TO_WIN; j++) { ctx.globalAlpha = j < z.bonks || z.mode === 'sleep' ? 1 : .25; ctx.fillText('⚔️', mx - 40 * S + j * 40 * S, 132 * S); }
+    ctx.globalAlpha = 1;
+    if (z.seenT > 1.5 && state !== 'end') {
+      ctx.font = `600 ${20 * S}px "Cinzel", Georgia, serif`; ctx.fillStyle = 'rgba(255,255,255,.6)';
+      ctx.fillText('👀 Step in front of the camera', mx, 166 * S);
+    }
+  }
+  if (zones.length === 2) {
+    ctx.strokeStyle = 'rgba(247,200,67,.45)'; ctx.lineWidth = 4; ctx.setLineDash([20, 16]);
+    ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  for (const p of particles) {
+    ctx.globalAlpha = Math.min(1, Math.max(0, p.life / 0.6)); ctx.fillStyle = p.col;
+    ctx.beginPath(); ctx.arc(p.x, p.y, (p.r || 6) * S, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const t of texts) {
+    ctx.globalAlpha = Math.max(0, Math.min(1, t.life / 0.6)); ctx.fillStyle = t.col;
+    let size = (t.big ? 62 : t.small ? 34 : 54) * S;
+    ctx.font = `800 ${size}px "Cinzel Decorative", Georgia, serif`;
+    if (t.maxW) { const w = ctx.measureText(t.t).width; if (w > t.maxW) { size *= t.maxW / w; ctx.font = `800 ${size}px "Cinzel Decorative", Georgia, serif`; } }
+    if (t.big) { ctx.lineWidth = 6 * S; ctx.strokeStyle = 'rgba(10,30,20,.85)'; ctx.strokeText(t.t, t.x, t.y); }
+    ctx.fillText(t.t, t.x, t.y);
+    if (t.sub) { ctx.font = `800 ${44 * S}px "Cinzel Decorative", Georgia, serif`; ctx.fillText(t.sub, t.x, t.y + size * 1.1); }
+  }
+  ctx.globalAlpha = 1;
+
+  ctx.fillStyle = '#fff';
+  if (state === 'play') {
+    ctx.font = `800 ${40 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillStyle = timeLeft < 10 ? '#ff6b6b' : '#fff';
+    ctx.fillText('⌛ ' + Math.ceil(timeLeft), W / 2, H - 36 * S);
+  }
+  if (state === 'count') {
+    const n = Math.ceil(countdown);
+    ctx.font = `900 ${240 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillText(n > 0 ? n : 'GO!', W / 2, H * 0.4);
+    ctx.font = `600 ${36 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillText('Stand tall and still!', W / 2, H * 0.4 + 160 * S);
+  }
+}
+
+// ---------- main loop ----------
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  poses = trackPoses(now); update(dt); draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+startTracking(status);
+window.basiliskTest = () => ({ state, gt, timeLeft, zones: zones.map(z => ({ score: z.score, dodges: z.dodges, hits: z.hits, bonks: z.bonksAll, wins: z.wins,
+  mode: z.mode, modeT: z.modeT, target: z.mode === 'tired' && z.modeT >= LOWER, next: z.things.filter(t => !t.done).map(t => ({ high: t.high, in: t.arrive - gt })) })) });
+</script>
+</body>
+</html>
