@@ -985,9 +985,17 @@ function draw() {
     const z = { lw: W, lh: H, u: H / 560, y0: 0, gy: H * 0.8, dist: now * 60 };
     drawLaneBg(z, now);
   }
-  for (const z of zones) {
+  for (const z of zones) { // forest backgrounds first
     ctx.save(); ctx.beginPath(); ctx.rect(0, z.y0, z.lw, z.lh); ctx.clip();
     drawLaneBg(z, now);
+    ctx.restore();
+  }
+  if (zones.length && video.readyState >= 2) { // the camera over the forest, like the other games (Camera setting)
+    ctx.save(); ctx.globalAlpha = look().over || 0.25; ctx.translate(W, 0); ctx.scale(-1, 1);
+    ctx.drawImage(video, 0, 0, W, H); ctx.restore();
+  }
+  for (const z of zones) {
+    ctx.save(); ctx.beginPath(); ctx.rect(0, z.y0, z.lw, z.lh); ctx.clip();
     for (const f of z.food) drawFood(z, f, now);
     for (const t of z.things) if (!t.hitV) drawThing(z, t, now);
     drawRunner(z, now);
@@ -1009,15 +1017,6 @@ function draw() {
   if (zones.length === 2) {
     ctx.fillStyle = '#f7c843'; ctx.fillRect(0, H / 2 - 3 * S, W, 6 * S);
     ctx.fillStyle = '#5a1010'; ctx.fillRect(0, H / 2 - 1 * S, W, 2 * S);
-  }
-  // small camera picture in the top-right corner, so the kids see they are tracked
-  if (video.readyState >= 2 && zones.length) {
-    const cw = look().inset * S, ch = cw * 9 / 16, // Camera setting: window size
-      cx = W - cw - 14 * S, cy = 14 * S;
-    ctx.save(); ctx.beginPath(); ctx.roundRect(cx, cy, cw, ch, 12 * S); ctx.clip();
-    ctx.translate(cx + cw, cy); ctx.scale(-1, 1); ctx.drawImage(video, 0, 0, cw, ch); ctx.restore();
-    ctx.strokeStyle = '#fff'; ctx.lineWidth = 3 * S; ctx.beginPath(); ctx.roundRect(cx, cy, cw, ch, 12 * S); ctx.stroke();
-    if (zones.length === 2) { ctx.strokeStyle = 'rgba(255,210,63,.9)'; ctx.beginPath(); ctx.moveTo(cx + cw / 2, cy); ctx.lineTo(cx + cw / 2, cy + ch); ctx.stroke(); }
   }
 
   for (const p of particles) {

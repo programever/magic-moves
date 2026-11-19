@@ -1,11 +1,10 @@
 // Camera brightness setting (remembered in this browser, separately for each game).
 // cam = how bright the camera picture is (0..1), bg = how strong the game background is over it (0..1)  [Snitch]
 // over = the camera drawn again over the background, before the game items (0 = not)                   [most games]
-// inset = width of the small camera window (pixels on a 900-high screen)                                [Forest Run]
 export const LOOKS = {
-  dim: { name: 'Dim', cam: 0.5, bg: 1, over: 0, inset: 220 },
-  normal: { name: 'Normal', cam: 0.8, bg: 0.55, over: 0.45, inset: 360 },
-  bright: { name: 'Bright', cam: 1, bg: 0.3, over: 0.75, inset: 520 },
+  dim: { name: 'Dim', cam: 0.5, bg: 1, over: 0 },
+  normal: { name: 'Normal', cam: 0.8, bg: 0.55, over: 0.45 },
+  bright: { name: 'Bright', cam: 1, bg: 0.3, over: 0.75 },
 };
 // each game remembers its own setting (the kids choose per game)
 const KEY = 'magic-moves-camera-' + (location.pathname.split('/').filter(Boolean).pop() || 'game');
