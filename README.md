@@ -17,6 +17,8 @@ games/<name>/        one folder per game (index.html + its own music/pictures)
   spells/            Spell Class: trace a spell shape in the air with the wand
   owls/              Hedwig Post: take letters from owls, put them in the box with the same color
   duel/              Wizard Duel: sisters duel; right hand flicks spells, left hand up = shield
+  dance/             Dance Party: touch the beat stars on the beat (music made by code)
+  fishing/           Ocean Fishing: catch fish with a net in the right hand, avoid jellyfish
 shared/              used by every game
   recorder.js        records each round; end screen: Replay / Save video (else deleted)
   tracking.js        camera + body tracking (MediaPipe pose, 2 players)

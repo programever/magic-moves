@@ -1,0 +1,714 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="data:,">
+<title>Dance Party</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Cinzel:wght@600;800&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; height: 100%; background: #0c0418; overflow: hidden;
+    font-family: "Cinzel", Georgia, serif; color: #fff; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; }
+  video { display: none; }
+  .overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 22px; background: rgba(16, 4, 34, .86); text-align: center; }
+  .hidden { display: none !important; }
+  h1 { font-family: "Cinzel Decorative", Georgia, serif; font-size: 72px; margin: 0; color: #ffd84a;
+    text-shadow: 0 0 25px #ff4fd8aa; }
+  #end { background: rgba(16, 4, 34, .55); gap: 10px; }
+  #end h1 { font-size: 44px; }
+  #trophy { display: flex; gap: 60px; }
+  .cup { position: relative; width: 170px; filter: drop-shadow(0 0 25px #ffd700);
+    animation: shine 1.2s ease-in-out infinite alternate; }
+  .cup svg { width: 170px; display: block; }
+  .cupface { position: absolute; left: 50%; top: 65px; transform: translate(-50%, -50%); }
+  .cupface img { width: 72px !important; height: 72px !important; }
+  @keyframes shine { from { transform: rotate(-4deg) scale(1); } to { transform: rotate(4deg) scale(1.07); } }
+  .row { display: flex; gap: 14px; align-items: center; font-size: 28px; }
+  .row span { width: 220px; text-align: right; }
+  button { font: inherit; font-size: 28px; padding: 12px 28px; border-radius: 40px; border: 3px solid #fff3;
+    background: #ffffff14; color: #fff; cursor: pointer; }
+  button.on { background: #ffd84a; border-color: #ffd84a; color: #2a1600; font-weight: 800; }
+  #start, .again { font-size: 40px; padding: 18px 60px; background: #b0157a; border-color: #ffd84a;
+    color: #fff3c4; font-weight: 800; }
+  .help { font-size: 22px; opacity: .8; max-width: 980px; line-height: 1.5; }
+  #status { position: fixed; bottom: 20px; left: 0; right: 0; text-align: center; font-size: 26px; }
+  #result { font-size: 28px; line-height: 1.5; }
+  @media (max-height: 820px) { /* small screen: make the menu fit */
+    #menu { gap: 12px; } #menu h1 { font-size: 54px; } #menu .help { font-size: 18px; }
+    #menu button { padding: 8px 24px; } #menu #start { padding: 12px 52px; } }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="menu" class="overlay">
+  <h1>🎵 Dance Party 🪩</h1>
+  <div class="row"><span>Players</span>
+    <button data-players="1">1 player</button><button data-players="2">2 players</button></div>
+  <div class="row" id="lvl0"><span id="lvl0name">Left player</span>
+    <button data-side="0" data-level="easy">Easy</button><button data-side="0" data-level="hard">Hard</button></div>
+  <div class="row" id="lvl1"><span>Right player</span>
+    <button data-side="1" data-level="easy">Easy</button><button data-side="1" data-level="hard">Hard</button></div>
+  <button id="home" onclick="location.href='../../'">🏠 All games</button>
+  <button id="start">Start ▶</button>
+  <div class="help">Touch the beat stars with your hands when the ring closes — on the beat! 🎶<br>
+    Perfect = 3 points. &nbsp; Good = 2. &nbsp; A bit late = 1.<br>
+    Hard: 👣 stars on the floor (step on them!) and 🙌 pairs (both hands at once).<br>
+    Keys: Space = start, Esc = menu, F = full screen, M = music on/off, H = all games.<br>
+    Test: the mouse is a hand (it touches every star). A = robot dancer on/off.</div>
+</div>
+
+<div id="end" class="overlay hidden">
+  <h1 id="endTitle"></h1>
+  <div id="trophy"></div>
+  <div id="result"></div>
+  <button class="again">Play again ▶</button>
+  <button id="toMenu">Menu</button>
+</div>
+
+<div id="status"></div>
+
+<script type="module">
+import { video, startTracking, track as trackPoses } from '../../shared/tracking.js';
+import { KIDS, drawKidFace, kidImg } from '../../shared/kids.js';
+import { recStart, recStop, recCancel } from '../../shared/recorder.js';
+
+const $ = s => document.querySelector(s);
+const canvas = $('#c'), ctx = canvas.getContext('2d');
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+let W, H, S;
+function resize() {
+  const d = devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight; S = H / 900;
+  canvas.width = W * d; canvas.height = H * d; ctx.setTransform(d, 0, 0, d, 0, 0);
+}
+addEventListener('resize', resize); resize();
+
+// ---------- settings ----------
+// every = a star every N beats, lead = the ring shrinks for N beats, r = star size,
+// perfect / good = timing windows in seconds (+/-), fade = seconds after the beat she can still touch it (OK)
+const LEVELS = {
+  easy: { name: 'Easy', bpm: 100, every: 2, lead: 3, r: 74, perfect: 0.22, good: 0.45, fade: 1.0, feet: 0, pair: 0 },
+  hard: { name: 'Hard', bpm: 120, every: 1, lead: 2, r: 52, perfect: 0.15, good: 0.3, fade: 0.6, feet: 0.18, pair: 0.14 },
+};
+const ROUND = +new URLSearchParams(location.search).get('t') || 35; // ?t=10 = 10 second round
+const FACES = { easy: KIDS.player1, hard: KIDS.player2 }; // Easy = player 1, Hard = player 2
+const drawFace = (f, x, y, r, ring) => drawKidFace(ctx, f, x, y, r, ring);
+const COLORS = ['#ff6bd6', '#5fd4ff'];
+const STAR_COL = { L: '#ff4fd8', R: '#36e0ff', foot: '#ffe14a', pair: '#8dff5a' };
+const PARTY = ['#ff4fd8', '#36e0ff', '#ffe14a', '#8dff5a', '#ff8a3d', '#a66bff'];
+const CAM_LAG = 0.1;   // the camera sees her hand about 0.1 s late
+const HAND_R = 30;
+const settings = { players: 2, levels: ['easy', 'hard'] };
+
+function refreshMenu() {
+  document.querySelectorAll('[data-players]').forEach(b => b.classList.toggle('on', +b.dataset.players === settings.players));
+  document.querySelectorAll('[data-level]').forEach(b => b.classList.toggle('on', settings.levels[b.dataset.side] === b.dataset.level));
+  $('#lvl1').classList.toggle('hidden', settings.players === 1);
+  $('#lvl0name').textContent = settings.players === 1 ? 'Level' : 'Left player';
+}
+document.querySelectorAll('[data-players]').forEach(b => b.onclick = () => { settings.players = +b.dataset.players; refreshMenu(); });
+document.querySelectorAll('[data-level]').forEach(b => b.onclick = () => { settings.levels[b.dataset.side] = b.dataset.level; refreshMenu(); });
+refreshMenu();
+
+// ---------- sound effects ----------
+let ac;
+function tone(type, f1, f2, dur, vol, delay = 0) {
+  const t = ac.currentTime + delay, o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.connect(g); g.connect(ac.destination);
+  o.frequency.setValueAtTime(f1, t); o.frequency.exponentialRampToValueAtTime(f2, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function sfx(kind) {
+  if (!ac) return;
+  if (kind === 'perfect') [1047, 1319, 1568].forEach((f, i) => tone('sine', f, f, 0.2, 0.2, i * 0.04));
+  if (kind === 'good') [784, 1047].forEach((f, i) => tone('sine', f, f, 0.18, 0.18, i * 0.04));
+  if (kind === 'ok') tone('sine', 660, 660, 0.14, 0.15);
+  if (kind === 'combo') [1047, 1319, 1568, 2093, 2637].forEach((f, i) => tone('triangle', f, f, 0.22, 0.18, i * 0.06));
+  if (kind === 'beep') tone('square', 600, 600, 0.12, 0.15);
+  if (kind === 'go') tone('square', 900, 900, 0.3, 0.15);
+  if (kind === 'end') // trumpet fanfare
+    [[523, 0, .15], [523, .18, .15], [523, .36, .15], [698, .54, .35], [880, .92, .2], [784, 1.12, .2], [1047, 1.32, .9]]
+      .forEach(([f, d, len]) => { tone('sawtooth', f, f, len, 0.12, d); tone('triangle', f, f, len, 0.25, d); });
+}
+
+// ---------- dance music (made by code, steady tempo: C - G - Am - F, 4 beats per bar) ----------
+// Loudness: about like the other games' song at volume 0.4 (20% quieter than 0.5).
+const MUSIC_VOL = 1.1;
+const midi = m => 440 * 2 ** ((m - 69) / 12);
+const ROOTS = [36, 31, 33, 29];                                   // C, G, A, F (bass)
+const CHORDS = [[60, 64, 67], [59, 62, 67], [60, 64, 69], [60, 65, 69]];
+const _ = 0;
+const MELODY = [
+  [72, _, _, 76, _, _, 79, _, _, _, 76, _, 79, _, _, _],
+  [74, _, _, 79, _, _, 83, _, _, _, 81, _, 79, _, _, _],
+  [76, _, _, 81, _, _, 84, _, _, _, 83, _, 81, _, 79, _],
+  [77, _, 76, _, 74, _, 72, _, _, _, 74, _, 76, _, _, _],
+];
+function noiseBuffer(a) {
+  const b = a.createBuffer(1, a.sampleRate, a.sampleRate), d = b.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  return b;
+}
+function makeMix(a, dest) { // one set of music nodes on an audio context
+  const m = { a, out: a.createGain(), noise: noiseBuffer(a), lp: a.createBiquadFilter() };
+  const comp = a.createDynamicsCompressor(); // keeps the loud kick drum from clipping
+  comp.threshold.value = -20; comp.knee.value = 10; comp.ratio.value = 4; comp.attack.value = 0.003; comp.release.value = 0.15;
+  m.out.gain.value = MUSIC_VOL; m.out.connect(comp); comp.connect(dest);
+  m.lp.type = 'lowpass'; m.lp.frequency.value = 800; m.lp.Q.value = 5; m.lp.connect(m.out);
+  return m;
+}
+function osc(m, type, f, t, dur, vol, dest = m.out) {
+  const o = m.a.createOscillator(), g = m.a.createGain();
+  o.type = type; o.frequency.value = f; o.connect(g); g.connect(dest);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.005);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function noise(m, t, dur, vol, ftype, freq) {
+  const s = m.a.createBufferSource(), f = m.a.createBiquadFilter(), g = m.a.createGain();
+  s.buffer = m.noise; f.type = ftype; f.frequency.value = freq;
+  s.connect(f); f.connect(g); g.connect(m.out);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  s.start(t, Math.random() * 0.8); s.stop(t + dur + 0.02);
+}
+function kick(m, t) {
+  const o = m.a.createOscillator(), g = m.a.createGain();
+  o.type = 'sine'; o.connect(g); g.connect(m.out);
+  o.frequency.setValueAtTime(160, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.13);
+  g.gain.setValueAtTime(0.9, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+  o.start(t); o.stop(t + 0.32);
+}
+// one 16th-note step of the song. i = step number (16 per bar), t = when, st = length of a step
+function musicStep(m, i, t, st) {
+  const s = i % 16, bar = Math.floor(i / 16), ch = bar % 4;
+  if (s % 4 === 0) kick(m, t);                                       // kick on every beat
+  if (s % 4 === 2) noise(m, t, 0.09, 0.22, 'highpass', 7000);        // open hi-hat between beats
+  else noise(m, t, 0.03, 0.08, 'highpass', 9000);                    // soft closed hi-hat
+  if (bar < 1) return;                                               // first bar: drums only
+  if (s === 4 || s === 12) { noise(m, t, 0.16, 0.45, 'bandpass', 1400); noise(m, t + 0.012, 0.1, 0.25, 'bandpass', 2200); } // clap
+  if (s % 2 === 0) osc(m, 'sawtooth', midi(ROOTS[ch] + (s % 4 === 2 ? 12 : 0)), t, st * 1.6, 0.5, m.lp); // disco octave bass
+  if (s % 4 === 2) for (const n of CHORDS[ch]) osc(m, 'triangle', midi(n), t, 0.14, 0.07);              // chord stabs
+  if (bar < 2) return;                                               // melody from bar 3
+  const n = MELODY[ch][s];
+  if (n) { osc(m, 'triangle', midi(n), t, st * 2.6, 0.26); osc(m, 'sine', midi(n + 12), t, st * 1.5, 0.07); }
+}
+
+let musicOn = true, mix = null, musicTimer = null, musicI = 0;
+let bpm = 110, spb = 60 / 110, songStart = 0;
+function startSong() {
+  stopSong();
+  mix = makeMix(ac, ac.destination);
+  if (!musicOn) mix.out.gain.value = 0;
+  songStart = ac.currentTime + 0.15; musicI = 0;
+  const st = spb / 4;
+  musicTimer = setInterval(() => {
+    while (songStart + musicI * st < ac.currentTime + 0.15) { musicStep(mix, musicI, songStart + musicI * st, st); musicI++; }
+  }, 25);
+}
+function stopSong() {
+  clearInterval(musicTimer); musicTimer = null;
+  if (mix) { const m = mix; m.out.gain.setTargetAtTime(0, ac.currentTime, 0.08); setTimeout(() => m.out.disconnect(), 800); mix = null; }
+}
+function setMusic(on) {
+  musicOn = on;
+  if (mix) mix.out.gain.setTargetAtTime(on ? MUSIC_VOL : 0, ac.currentTime, 0.05);
+  if (!on) stopWinnerSong();
+}
+// the time of the song she HEARS now (seconds since beat 0)
+const songNow = () => ac ? ac.currentTime - (ac.outputLatency || 0) - songStart : 0;
+
+// winner song on the trophy screen (from Iker, not in git). If it can't play, there is just the fanfare.
+const winnerSong = new Audio('../../shared/music/winner.mp3');
+winnerSong.volume = 0.7;
+let winnerTimer = null;
+function playWinnerSong() {
+  if (!musicOn) return;
+  winnerTimer = setTimeout(() => { winnerSong.currentTime = 0; winnerSong.play().catch(() => {}); }, 2200); // after the trumpet
+}
+function stopWinnerSong() { clearTimeout(winnerTimer); winnerSong.pause(); }
+
+// ---------- camera + body tracking ----------
+let poses = [];
+const status = t => $('#status').textContent = t;
+const sx = lm => (1 - lm.x) * W; // camera is mirrored
+
+// ---------- game state ----------
+const COUNT_BEATS = 6;            // 3 - 2 - 1 (two beats each), then GO
+let state = 'menu', zones = [], particles = [], texts = [], rings = [], mouse = null, auto = false;
+let goT = 0, playEnd = 0, lastBeep = 4, timeLeft = 0;
+
+function makeZones() {
+  zones = [];
+  for (let i = 0; i < settings.players; i++) {
+    const level = LEVELS[settings.levels[i]];
+    zones.push({ i, level, face: FACES[settings.levels[i]], score: 0, combo: 0, best: 0, perfects: 0, color: COLORS[i],
+      body: null, seenT: 9, hands: [], targets: [], nextBeat: COUNT_BEATS + level.lead, side: 1, bump: 0, comboPop: 0 });
+  }
+  // one tempo for everybody: 100 (Easy), 120 (Hard), 110 when the two levels are different
+  const lv = new Set(zones.map(z => z.level));
+  bpm = lv.size === 1 ? [...lv][0].bpm : 110; spb = 60 / bpm;
+}
+const zoneX = z => { const w = W / zones.length; return [z.i * w, (z.i + 1) * w]; };
+
+// Each body goes to the half where its nose is (the biggest body wins).
+function readBodies(dt) {
+  const found = zones.map(() => null);
+  for (const p of poses) {
+    if (!p[0] || !p[11] || !p[12]) continue;
+    const zi = zones.length === 1 ? 0 : (sx(p[0]) < W / 2 ? 0 : 1);
+    const width = Math.abs(p[11].x - p[12].x);
+    if (!found[zi] || width > found[zi].width) found[zi] = { p, width };
+  }
+  zones.forEach((z, i) => {
+    z.hands = [];
+    const p = found[i]?.p;
+    if (!p) { z.seenT += dt; if (z.seenT > 0.4) z.body = null; }
+    else {
+      z.seenT = 0;
+      const ok = j => p[j] && (p[j].visibility ?? 1) > 0.35;
+      const x = j => sx(p[j]), y = j => p[j].y * H;
+      const sw = Math.abs(x(11) - x(12)), shY = (y(11) + y(12)) / 2;
+      const hipSeen = ok(23) && ok(24);
+      const T = Math.max(0.1 * H, hipSeen ? Math.max(sw * 0.8, (y(23) + y(24)) / 2 - shY) : sw * 1.3); // torso length
+      const feetY = ok(27) && ok(28) ? (y(27) + y(28)) / 2 : ok(27) ? y(27) : ok(28) ? y(28) : null;
+      z.body = { ok, x, y, sw, shY, T, cx: (x(11) + x(12)) / 2, feetY };
+      for (const [w, f] of [[15, 19], [16, 20]]) if (ok(w)) { const k = ok(f) ? f : w; z.hands.push({ x: x(k), y: y(k), kind: 'hand', lag: CAM_LAG }); }
+      for (const [a, f] of [[27, 31], [28, 32]]) if (ok(a)) { const k = ok(f) ? f : a; z.hands.push({ x: x(k), y: y(k), kind: 'foot', lag: CAM_LAG }); }
+    }
+  });
+  if (mouse && zones.length) {
+    const z = zones.length === 1 ? zones[0] : zones[mouse.x < W / 2 ? 0 : 1];
+    z.hands.push({ x: mouse.x, y: mouse.y, kind: 'any', lag: 0, mouse: true });
+  }
+}
+
+// her body size and place (or a pretend one in the middle of her half when the camera sees nobody)
+function frame(z) {
+  if (z.body) return z.body;
+  const [x0, x1] = zoneX(z), T = 0.17 * H;
+  return { cx: (x0 + x1) / 2, shY: 0.47 * H, sw: T * 0.8, T, feetY: 0.9 * H };
+}
+
+// ---------- beat stars ----------
+function place(z, t) {
+  const [x0, x1] = zoneX(z), m = t.r + 8 * S;
+  t.x = clamp(t.x, x0 + m, x1 - m); t.y = clamp(t.y, t.r + 14 * S, H - t.r - 6 * S);
+}
+function handSpot(z, b, side, ang, dist) { // a place her hand can reach: out to the side, shoulder height up to above the head
+  const arm = b.T * 1.3, shX = b.cx + side * b.sw / 2;
+  return { x: shX + side * Math.cos(ang) * arm * dist, y: b.shY - Math.sin(ang) * arm * dist };
+}
+function spawnAt(z, beat) {
+  const L = z.level, b = frame(z), r = L.r * S, roll = Math.random(), beatT = beat * spb;
+  const make = (kind, side, pos) => { const t = { kind, side, beat: beatT, r: kind === 'foot' ? r * 1.15 : r, ...pos, hit: 0 }; place(z, t); return t; };
+  let ts = [], best = null, bestGap = -1e9;
+  for (let tries = 0; tries < 14; tries++) {
+    if (Math.random() < 0.75) z.side = -z.side; // mostly left, right, left, right…
+    const ang = rand(0, 1.3), dist = rand(0.65, 1.0);
+    if (roll < L.feet) {
+      const fy = Math.min(b.feetY ?? 0.9 * H, H - r * 1.15 - 6 * S);
+      ts = [make('foot', z.side, { x: b.cx + z.side * b.T * rand(0.55, 0.95), y: fy })];
+    } else if (roll < L.feet + L.pair) {
+      const a = handSpot(z, b, -1, ang, dist), c = handSpot(z, b, 1, ang, dist);
+      ts = [make('pair', -1, a), make('pair', 1, c)];
+      ts[0].mate = ts[1]; ts[1].mate = ts[0];
+    } else ts = [make(z.side < 0 ? 'L' : 'R', z.side, handSpot(z, b, z.side, ang, dist))];
+    let gap = 1e9; // smallest space to the other stars still waiting
+    for (const t of ts) for (const o of z.targets) if (!o.hit) gap = Math.min(gap, Math.hypot(o.x - t.x, o.y - t.y) - (o.r + t.r) * 1.1);
+    if (gap > bestGap) { best = ts; bestGap = gap; }
+    if (gap > 0) break;
+  }
+  z.targets.push(...best);
+  return best.length; // 2 = a pair
+}
+
+function judge(z, t, tj) { // she touched star t at song time tj
+  const L = z.level, d = Math.abs(tj - t.beat);
+  return d <= L.perfect ? 'perfect' : d <= L.good ? 'good' : 'ok';
+}
+const PTS = { perfect: 3, good: 2, ok: 1 };
+const JUDGE_TXT = { perfect: 'Perfect!', good: 'Good!', ok: 'OK' };
+const JUDGE_COL = { perfect: '#ffe14a', good: '#8dff5a', ok: '#ffffff' };
+
+function award(z, x, y, j, bonus = 0, col) {
+  const pts = PTS[j] + bonus;
+  z.score += pts; z.combo++; z.best = Math.max(z.best, z.combo); z.bump = 1;
+  if (j === 'perfect') z.perfects++;
+  sfx(j);
+  texts.push({ x, y: y - 20 * S, t: (bonus ? 'Both hands! ' : JUDGE_TXT[j] + ' ') + '+' + pts, life: 0.9, col: JUDGE_COL[j], size: 40 });
+  burst(x, y, col, j === 'perfect' ? 22 : 14);
+  rings.push({ x, y, r: 30 * S, life: 0.4, col });
+  if (z.combo >= 2) z.comboPop = 1;
+  if (z.combo % 10 === 0) { // confetti party every 10 in a row!
+    sfx('combo');
+    const [x0, x1] = zoneX(z);
+    for (let k = 0; k < 70; k++) particles.push({ x: rand(x0, x1), y: rand(-40, 0), vx: rand(-80, 80) * S, vy: rand(80, 260) * S,
+      life: 2.2, col: PARTY[k % PARTY.length], r: rand(4, 8), g: 120, sq: true });
+    texts.push({ x: (x0 + x1) / 2, y: H * .42, t: `x${z.combo} combo! 🎉`, life: 1.5, col: '#ffe14a', size: 70 });
+  }
+}
+function burst(x, y, col, n) {
+  for (let k = 0; k < n; k++) {
+    const a = rand(0, 6.28), v = rand(150, 420) * S;
+    particles.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0.6, col: k % 3 ? col : '#fff', r: rand(3, 7) });
+  }
+}
+function miss(z) { z.combo = 0; }
+
+function updateTargets(z, now) {
+  const L = z.level;
+  // new stars: each one appears 'lead' beats before its beat
+  while ((z.nextBeat - L.lead) * spb <= now && z.nextBeat * spb <= playEnd - 0.2) { const n = spawnAt(z, z.nextBeat); z.nextBeat += L.every * n; } // a pair gets two beats
+  for (const t of z.targets) {
+    if (t.done) continue;
+    if (!t.hit) for (const h of z.hands) {
+      const fits = h.kind === 'any' || (t.kind === 'foot' ? h.kind === 'foot' : h.kind === 'hand');
+      if (!fits) continue;
+      const tj = now - h.lag;
+      if (tj < t.beat - L.good || tj > t.beat + L.fade) continue;
+      if (Math.hypot(h.x - t.x, h.y - t.y) > t.r + HAND_R * S * (t.kind === 'foot' ? 1.6 : 1)) continue;
+      t.hit = tj; t.j = judge(z, t, tj);
+      if (t.kind !== 'pair') { t.done = true; award(z, t.x, t.y, t.j, 0, STAR_COL[t.kind]); }
+      else if (t.mate.hit) { // both hands: the later touch counts, +2 bonus
+        t.done = t.mate.done = true;
+        const j = PTS[t.j] < PTS[t.mate.j] ? t.j : t.mate.j;
+        burst(t.mate.x, t.mate.y, STAR_COL.pair, 14);
+        award(z, (t.x + t.mate.x) / 2, Math.min(t.y, t.mate.y), j, 2, STAR_COL.pair);
+      } else { sfx('ok'); burst(t.x, t.y, STAR_COL.pair, 8); }
+      break;
+    }
+    if (!t.done && now > t.beat + L.fade + 0.15) { // too late: it fades away. No minus points.
+      t.done = true;
+      if (t.kind === 'pair') { // only one hand came: normal points, no bonus
+        const one = [t, t.mate].find(x => x.hit); t.mate.done = true;
+        if (one) award(z, one.x, one.y, one.j, 0, STAR_COL.pair); else miss(z);
+      } else miss(z);
+    }
+  }
+  z.targets = z.targets.filter(t => !t.done);
+}
+
+// test / demo: a robot dancer touches every star right on the beat
+function robotHands(z, now) {
+  for (const t of z.targets) if (!t.hit && now >= t.beat - 0.02) z.hands.push({ x: t.x, y: t.y, kind: 'any', lag: 0, robot: true });
+}
+
+// ---------- game flow ----------
+function startGame() {
+  if (!ac) ac = new AudioContext();
+  ac.resume();
+  recStart(canvas, ac, [winnerSong]); // record this round (see shared/recorder.js)
+  stopWinnerSong();
+  makeZones(); particles = []; texts = []; rings = [];
+  startSong();
+  goT = COUNT_BEATS * spb; playEnd = goT + ROUND; timeLeft = ROUND;
+  $('#menu').classList.add('hidden'); $('#end').classList.add('hidden');
+  state = 'count'; lastBeep = 4;
+}
+
+function endGame() {
+  recStop();
+  state = 'end'; stopSong(); sfx('end'); playWinnerSong();
+  zones.forEach(z => z.targets = []);
+  const best = Math.max(...zones.map(z => z.score)), winners = zones.filter(z => z.score === best);
+  $('#endTitle').textContent = zones.length === 1 ? `${zones[0].face.name}, Dance Star!`
+    : winners.length === 2 ? 'A tie! Two dance stars!' : `${winners[0].face.name} wins the Dance Party!`;
+  $('#trophy').innerHTML = winners.map(z => `<div class="cup">${CUP}<div class="cupface">${kidImg(z.face, '#fff6c8')}</div></div>`).join('');
+  $('#result').innerHTML = zones.map(z => `<span style="color:${z.color}">${kidImg(z.face, z.color)} ${z.face.name} (${z.level.name}): ` +
+    `<b>${z.score}</b> points · best combo x${z.best}</span>`).join('<br>');
+  $('#end').classList.remove('hidden');
+}
+const CUP = `<svg viewBox="0 0 200 240"><defs><linearGradient id="gold" x1="0" x2="1">
+  <stop offset="0" stop-color="#8a5a00"/><stop offset=".35" stop-color="#fff1b0"/><stop offset=".6" stop-color="#f5c542"/>
+  <stop offset="1" stop-color="#8a5a00"/></linearGradient></defs>
+  <path d="M48 35 C5 35 5 105 62 112" fill="none" stroke="url(#gold)" stroke-width="12"/>
+  <path d="M152 35 C195 35 195 105 138 112" fill="none" stroke="url(#gold)" stroke-width="12"/>
+  <path d="M38 20 H162 C162 105 132 135 100 140 C68 135 38 105 38 20Z" fill="url(#gold)"/>
+  <rect x="90" y="138" width="20" height="38" fill="url(#gold)"/>
+  <path d="M62 176 H138 L150 202 H50Z" fill="url(#gold)"/>
+  <rect x="36" y="202" width="128" height="30" rx="5" fill="#8a1270" stroke="#f5c542" stroke-width="3"/>
+  <text x="100" y="223" text-anchor="middle" font-family="Cinzel, Georgia, serif" font-weight="800" font-size="16"
+    fill="#fff3c4">★ DANCE STAR ★</text></svg>`;
+function toMenu() {
+  recCancel();
+  state = 'menu'; zones = []; stopSong(); stopWinnerSong();
+  $('#end').classList.add('hidden'); $('#menu').classList.remove('hidden');
+}
+
+$('#start').onclick = startGame;
+document.querySelector('.again').onclick = startGame;
+$('#toMenu').onclick = toMenu;
+addEventListener('keydown', e => {
+  if (e.code === 'Space' && state !== 'play' && state !== 'count') startGame();
+  if (e.code === 'Escape') toMenu();
+  if (e.code === 'KeyH') location.href = '../../';
+  if (e.code === 'KeyM') setMusic(!musicOn);
+  if (e.code === 'KeyA') auto = !auto;
+  if (e.code === 'KeyF') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+});
+addEventListener('mousemove', e => mouse = { x: e.clientX, y: e.clientY });
+document.addEventListener('mouseleave', () => mouse = null);
+
+// ---------- update ----------
+function update(dt) {
+  const now = songNow();
+  if (state === 'count') {
+    const n = now < 0 ? 3 : 3 - Math.floor(now / spb / 2);
+    if (n < lastBeep) { lastBeep = n; sfx(n > 0 ? 'beep' : 'go'); }
+    if (now >= goT) state = 'play';
+  }
+  if (state === 'play') {
+    timeLeft = Math.max(0, playEnd - now);
+    if (now >= playEnd) endGame();
+  }
+  if (zones.length) readBodies(dt);
+  for (const z of zones) {
+    z.bump = Math.max(0, z.bump - dt * 4); z.comboPop = Math.max(0, z.comboPop - dt * 3);
+    if (state === 'play') { if (auto) robotHands(z, now); updateTargets(z, now); }
+  }
+  if (state === 'end' && Math.random() < 0.6) // confetti for the dance star
+    particles.push({ x: rand(0, W), y: -10, vx: rand(-40, 40) * S, vy: rand(50, 150) * S, life: 3,
+      col: PARTY[Math.floor(rand(0, PARTY.length))], r: rand(3, 7), g: 20, sq: true });
+  for (const p of particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += (p.g ?? 500) * S * dt; p.life -= dt; }
+  if (particles.length > 600) particles.splice(0, particles.length - 600);
+  particles = particles.filter(p => p.life > 0);
+  for (const t of texts) { t.y -= 70 * S * dt; t.life -= dt; }
+  texts = texts.filter(t => t.life > 0);
+  for (const r of rings) { r.r += 260 * S * dt; r.life -= dt; }
+  rings = rings.filter(r => r.life > 0);
+}
+
+// ---------- draw: disco stage ----------
+// beat clock: the song while playing, otherwise a calm pretend beat for the menu
+function beatClock() {
+  if (ac && (state === 'count' || state === 'play') && songNow() >= 0) { const b = songNow() / spb; return { n: Math.floor(b), ph: b % 1 }; }
+  const b = performance.now() / 1000 / (60 / 110); return { n: Math.floor(b), ph: b % 1 };
+}
+const glowCache = {};
+function glow(col) { // a soft round glow picture, made once per color (much cheaper than shadowBlur)
+  if (glowCache[col]) return glowCache[col];
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d'), gr = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  gr.addColorStop(0, col); gr.addColorStop(0.35, col + '88'); gr.addColorStop(1, col + '00');
+  g.fillStyle = gr; g.fillRect(0, 0, 128, 128);
+  return glowCache[col] = c;
+}
+const SPOTS = Array.from({ length: 30 }, (_, i) => ({ a: rand(0, 6.28), y: rand(0.08, 0.7), r: rand(8, 20), col: PARTY[i % PARTY.length] }));
+
+function drawStage(t, beat) {
+  const flash = Math.exp(-beat.ph * 4);
+  // dark stage over the camera picture
+  ctx.fillStyle = 'rgba(12,3,26,.62)'; ctx.fillRect(0, 0, W, H);
+  // spotlights from the ceiling, swinging
+  for (let i = 0; i < 4; i++) {
+    const ox = W * [0.08, 0.36, 0.64, 0.92][i], a = Math.sin(t * 0.7 + i * 1.7) * 0.45 + (i < 2 ? 0.25 : -0.25);
+    const len = H * 2.2, half = 0.2, col = PARTY[(i + Math.floor(beat.n / 4)) % PARTY.length];
+    const gr = ctx.createLinearGradient(ox, 0, ox + Math.sin(a) * H * 1.1, Math.cos(a) * H * 1.1);
+    gr.addColorStop(0, col + '55'); gr.addColorStop(1, col + '00');
+    ctx.fillStyle = gr; ctx.beginPath(); ctx.moveTo(ox, -5);
+    ctx.lineTo(ox + Math.sin(a - half) * len, Math.cos(a - half) * len);
+    ctx.lineTo(ox + Math.sin(a + half) * len, Math.cos(a + half) * len); ctx.fill();
+  }
+  // light spots from the mirror ball, going round the room
+  const rot = t * 0.5;
+  for (const s of SPOTS) {
+    const c = Math.cos(s.a + rot); if (c < 0.15) continue;
+    ctx.globalAlpha = 0.28 * c; ctx.fillStyle = s.col;
+    ctx.beginPath(); ctx.arc(W / 2 + Math.sin(s.a + rot) * W * 0.58, s.y * H, s.r * S, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  drawFloor(beat, flash);
+  drawMirrorBall(t, flash);
+}
+function drawFloor(beat, flash) {
+  const hy = H * 0.76, ROWS = 4, COLS = 10, pat = beat.n % 4;
+  const yAt = k => hy + (H - hy) * (k / ROWS) ** 1.25, hw = k => W * (0.36 + 0.34 * k / ROWS);
+  const xAt = (k, c) => W / 2 + (c / COLS - 0.5) * 2 * hw(k);
+  ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(0,0,0,.7)';
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    const lit = pat === 0 ? (r + c) % 2 === 0 : pat === 1 ? (r + c) % 2 === 1
+      : pat === 2 ? Math.abs(c - 4.5) < 1 + r : ((c * 7 + r * 3 + beat.n * 5) % 5) < 2;
+    ctx.globalAlpha = lit ? 0.18 + 0.5 * flash : 0.08;
+    ctx.fillStyle = PARTY[(c + r * 2 + beat.n) % PARTY.length];
+    ctx.beginPath(); ctx.moveTo(xAt(r, c), yAt(r)); ctx.lineTo(xAt(r, c + 1), yAt(r));
+    ctx.lineTo(xAt(r + 1, c + 1), yAt(r + 1)); ctx.lineTo(xAt(r + 1, c), yAt(r + 1)); ctx.closePath();
+    ctx.fill(); ctx.globalAlpha = 0.6; ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+function drawMirrorBall(t, flash) {
+  const bx = W / 2, by = 68 * S, R = 44 * S, rot = t * 0.9;
+  ctx.strokeStyle = 'rgba(200,200,220,.6)'; ctx.lineWidth = 2 * S;
+  ctx.beginPath(); ctx.moveTo(bx, 0); ctx.lineTo(bx, by - R); ctx.stroke();
+  ctx.globalAlpha = 0.35 + 0.4 * flash; ctx.drawImage(glow('#ffffff'), bx - R * 2.2, by - R * 2.2, R * 4.4, R * 4.4); ctx.globalAlpha = 1;
+  ctx.fillStyle = '#5a5a6e'; ctx.beginPath(); ctx.arc(bx, by, R, 0, 7); ctx.fill();
+  const sq = R * 0.2;
+  for (let i = -3; i <= 3; i++) {
+    const lat = i * 0.4, cy = by + Math.sin(lat) * R, rr = Math.cos(lat) * R;
+    for (let j = 0; j < 14; j++) {
+      const lon = j * Math.PI * 2 / 14 + rot, c = Math.cos(lon); if (c < 0.1) continue;
+      const shine = (Math.sin(j * 2.3 + i * 1.7 + t * 4) + 1) / 2;
+      ctx.fillStyle = `rgba(${200 + 55 * shine | 0},${200 + 55 * shine | 0},255,${0.35 + 0.65 * shine * c})`;
+      ctx.fillRect(bx + Math.sin(lon) * rr - sq * c / 2, cy - sq / 2, sq * c * 0.9, sq * 0.9);
+    }
+  }
+}
+
+// her body, as the camera sees it: soft lines (two strokes, no shadow blur)
+const BONES = [[11, 12], [11, 13], [13, 15], [12, 14], [14, 16], [11, 23], [12, 24], [23, 24], [23, 25], [25, 27], [24, 26], [26, 28]];
+function drawSkeleton(z) {
+  const b = z.body; if (!b) return;
+  ctx.save(); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  const path = new Path2D();
+  for (const [i, j] of BONES) if (b.ok(i) && b.ok(j)) { path.moveTo(b.x(i), b.y(i)); path.lineTo(b.x(j), b.y(j)); }
+  ctx.globalAlpha = .22; ctx.strokeStyle = z.color; ctx.lineWidth = 20 * S; ctx.stroke(path);
+  ctx.globalAlpha = .6; ctx.strokeStyle = '#fff'; ctx.lineWidth = 4 * S; ctx.stroke(path);
+  if (b.ok(0)) { ctx.globalAlpha = .45; ctx.strokeStyle = z.color; ctx.lineWidth = 4 * S;
+    ctx.beginPath(); ctx.arc(b.x(0), b.y(0), Math.max(18 * S, b.sw * .45), 0, 7); ctx.stroke(); }
+  ctx.restore();
+}
+function drawHands(z) {
+  for (const h of z.hands) {
+    const r = (h.kind === 'foot' ? 16 : 14) * S;
+    ctx.globalAlpha = 0.7; ctx.drawImage(glow(z.color), h.x - r * 2.5, h.y - r * 2.5, r * 5, r * 5);
+    ctx.globalAlpha = 1; ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(h.x, h.y, r * 0.55, 0, 7); ctx.fill();
+    if (h.mouse) { ctx.strokeStyle = z.color; ctx.lineWidth = 3 * S; ctx.beginPath(); ctx.arc(h.x, h.y, HAND_R * S, 0, 7); ctx.stroke(); }
+  }
+}
+function starPath(R, r) {
+  ctx.beginPath();
+  for (let k = 0; k < 10; k++) { const a = k * Math.PI / 5 - Math.PI / 2, rr = k % 2 ? r : R; ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); }
+  ctx.closePath();
+}
+function drawTarget(z, t, now) {
+  const L = z.level, appear = t.beat - L.lead * spb, toBeat = t.beat - now;
+  const fadeIn = clamp((now - appear) / 0.25, 0, 1), fadeOut = toBeat < 0 ? clamp(1 + toBeat / (L.fade + 0.15), 0, 1) : 1;
+  const a = fadeIn * fadeOut, col = STAR_COL[t.kind], r = t.r, inWin = Math.abs(toBeat) <= L.good;
+  ctx.save(); ctx.translate(t.x, t.y); ctx.globalAlpha = a;
+  ctx.drawImage(glow(col), -r * 1.8, -r * 1.8, r * 3.6, r * 3.6);
+  ctx.fillStyle = 'rgba(20,6,40,.55)'; ctx.beginPath(); ctx.arc(0, 0, r * 0.82, 0, 7); ctx.fill();
+  ctx.lineWidth = 5 * S; ctx.strokeStyle = t.hit ? '#fff' : col; ctx.stroke();
+  // beat star in the middle (pulses on the beat)
+  ctx.save(); ctx.rotate(now * 1.5);
+  const pulse = 1 + (inWin ? 0.18 : 0.05) * Math.exp(-((now / spb) % 1) * 5);
+  if (t.kind !== 'foot') { ctx.fillStyle = t.hit ? '#fff' : col; starPath(r * 0.5 * pulse, r * 0.22 * pulse); ctx.fill(); }
+  ctx.restore();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  if (t.kind === 'foot') { ctx.font = `${r * 0.8 * pulse}px sans-serif`; ctx.fillText('👣', 0, 2 * S); } // step here!
+  if (t.kind === 'pair') { ctx.font = `${r * 0.5}px sans-serif`; ctx.fillText('🙌', 0, r * 0.95 + 4 * S); }
+  // the shrinking ring: it closes on the star exactly on the beat
+  if (toBeat > 0 && !t.hit) {
+    const k = toBeat / (L.lead * spb);
+    ctx.lineWidth = (4 + 4 * (1 - k)) * S; ctx.strokeStyle = inWin ? '#fff' : col;
+    ctx.beginPath(); ctx.arc(0, 0, r * (1 + 1.6 * k), 0, 7); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function draw() {
+  const t = performance.now() / 1000, beat = beatClock(), now = songNow();
+  ctx.fillStyle = '#0c0418'; ctx.fillRect(0, 0, W, H);
+  if (video.readyState >= 2) { // camera picture, mirrored, dim
+    ctx.save(); ctx.globalAlpha = 0.5; ctx.translate(W, 0); ctx.scale(-1, 1);
+    ctx.drawImage(video, 0, 0, W, H); ctx.restore();
+  }
+  drawStage(t, beat);
+
+  if (zones.length === 2) {
+    ctx.strokeStyle = 'rgba(255,216,74,.4)'; ctx.lineWidth = 4; ctx.setLineDash([20, 16]);
+    ctx.beginPath(); ctx.moveTo(W / 2, 140 * S); ctx.lineTo(W / 2, H); ctx.stroke(); ctx.setLineDash([]);
+  }
+  for (const z of zones) drawSkeleton(z);
+  for (const z of zones) {
+    for (const tg of z.targets) if (tg.kind === 'pair' && tg.side < 0 && !tg.hit && !tg.mate.hit) { // line between a pair
+      ctx.globalAlpha = 0.35; ctx.strokeStyle = STAR_COL.pair; ctx.lineWidth = 4 * S; ctx.setLineDash([10, 10]);
+      ctx.beginPath(); ctx.moveTo(tg.x, tg.y); ctx.lineTo(tg.mate.x, tg.mate.y); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+    }
+    for (const tg of z.targets) drawTarget(z, tg, now);
+    drawHands(z);
+  }
+  for (const r of rings) {
+    ctx.globalAlpha = Math.max(0, r.life / 0.4); ctx.strokeStyle = r.col; ctx.lineWidth = 6 * S;
+    ctx.beginPath(); ctx.arc(r.x, r.y, r.r, 0, 7); ctx.stroke();
+  }
+  for (const p of particles) {
+    ctx.globalAlpha = Math.min(1, Math.max(0, p.life / 0.6)); ctx.fillStyle = p.col;
+    const r = (p.r || 6) * S;
+    if (p.sq) ctx.fillRect(p.x - r / 2, p.y - r / 2, r, r * 1.6); else { ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fill(); }
+  }
+  ctx.globalAlpha = 1;
+  for (const tx of texts) {
+    ctx.globalAlpha = Math.max(0, Math.min(1, tx.life / 0.5)); ctx.fillStyle = tx.col;
+    ctx.font = `800 ${(tx.size || 40) * S}px "Cinzel Decorative", Georgia, serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.strokeStyle = 'rgba(0,0,0,.6)'; ctx.lineWidth = 6 * S; ctx.strokeText(tx.t, tx.x, tx.y); ctx.fillText(tx.t, tx.x, tx.y);
+  }
+  ctx.globalAlpha = 1;
+
+  // score + face + combo for each player (one player: on the left, so the mirror ball stays free)
+  for (const z of zones) {
+    const [x0, x1] = zoneX(z), cx = zones.length === 1 ? x0 + 230 * S : (x0 + x1) / 2 + (z.i === 0 ? -50 : 50) * S;
+    const sc = 1 + z.bump * 0.25;
+    ctx.save(); ctx.translate(cx + 40 * S, 18 * S + 35 * S); ctx.scale(sc, sc);
+    ctx.fillStyle = z.color; ctx.font = `800 ${70 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(z.score, 0, 0); ctx.restore();
+    drawFace(z.face, cx - 50 * S, 55 * S, 42 * S, z.color);
+    ctx.font = `600 ${24 * S}px "Cinzel Decorative", Georgia, serif`; ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.fillText(z.face.name + ' · ' + z.level.name, cx, 100 * S);
+    if (z.combo >= 2 && state === 'play') {
+      const s = 1 + z.comboPop * 0.3;
+      ctx.save(); ctx.translate(cx, 150 * S); ctx.scale(s, s);
+      ctx.font = `800 ${34 * S}px "Cinzel Decorative", Georgia, serif`; ctx.fillStyle = '#ffe14a'; ctx.textBaseline = 'middle';
+      ctx.fillText(`x${z.combo} combo!`, 0, 0); ctx.restore();
+    }
+  }
+
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#fff';
+  if (state === 'play') {
+    ctx.font = `800 ${44 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillStyle = timeLeft < 10 ? '#ff6b6b' : '#fff';
+    ctx.textAlign = 'right'; ctx.fillText('⌛ ' + Math.ceil(timeLeft), W - 24 * S, 45 * S); ctx.textAlign = 'center'; // top right: the floor is for feet stars
+    if (now - goT < 0.7) { ctx.fillStyle = '#ffe14a'; ctx.font = `900 ${200 * S}px "Cinzel Decorative", Georgia, serif`; ctx.fillText('GO!', W / 2, H / 2); }
+  }
+  if (state === 'count') {
+    const n = now < 0 ? 3 : 3 - Math.floor(now / spb / 2);
+    ctx.font = `900 ${260 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillText(Math.max(1, n), W / 2, H / 2);
+    ctx.font = `600 ${36 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillText('Get ready to dance! 💃', W / 2, H / 2 + 170 * S);
+  }
+}
+
+// ---------- main loop ----------
+let last = performance.now();
+function loop(nowMs) {
+  const dt = Math.min(0.05, (nowMs - last) / 1000); last = nowMs;
+  poses = trackPoses(nowMs); update(dt); draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+startTracking(status);
+
+// read-only helper for automatic tests (nothing here changes the game)
+window.__dance = {
+  get info() {
+    return { state, now: ac ? songNow() : 0, bpm, spb, goT, playEnd,
+      zones: zones.map(z => ({ score: z.score, combo: z.combo, best: z.best, level: z.level.name,
+        targets: z.targets.map(t => ({ x: t.x, y: t.y, r: t.r, kind: t.kind, beat: t.beat, hit: !!t.hit })) })) };
+  },
+  async musicRms(seconds = 8, bpmTest = 110) { // loudness of the dance music (for checking the volume)
+    const sr = 44100, oc = new OfflineAudioContext(1, sr * seconds, sr), m = makeMix(oc, oc.destination), st = 60 / bpmTest / 4;
+    for (let i = 0; st * i < seconds - 0.3; i++) musicStep(m, i + 32, 0.05 + st * i, st);
+    const d = (await oc.startRendering()).getChannelData(0);
+    let s = 0, pk = 0; for (const v of d) { s += v * v; pk = Math.max(pk, Math.abs(v)); }
+    return { rms: Math.sqrt(s / d.length), peak: pk };
+  },
+};
+</script>
+</body>
+</html>
