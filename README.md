@@ -15,7 +15,10 @@ games/<name>/        one folder per game (index.html + its own music/pictures)
   spiders/           Escape the Spiders: jump over logs, duck under webs
   hat/               Sorting Hat Dance: copy the pose the hat calls out
   spells/            Spell Class: trace a spell shape in the air with the wand
+  owls/              Hedwig Post: take letters from owls, put them in the box with the same color
+  duel/              Wizard Duel: sisters duel; right hand flicks spells, left hand up = shield
 shared/              used by every game
+  recorder.js        records each round; end screen: Replay / Save video (else deleted)
   tracking.js        camera + body tracking (MediaPipe pose, 2 players)
   kids.js            players: names + faces, drawKidFace(), kidImg()
   kids.example.js    example for shared/private/kids.js

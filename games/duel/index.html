@@ -1,0 +1,732 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Wizard Duel</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Cinzel:wght@600;800&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; height: 100%; background: #120a24; overflow: hidden;
+    font-family: "Cinzel", Georgia, serif; color: #fff; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; }
+  video { display: none; }
+  .overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 18px; background: rgba(18, 10, 36, .86); text-align: center; }
+  .hidden { display: none !important; }
+  h1 { font-family: "Cinzel Decorative", Georgia, serif; font-size: 68px; margin: 0; color: #f7c843;
+    text-shadow: 0 0 25px #ffb30088; }
+  #end { background: rgba(18, 10, 36, .55); gap: 10px; }
+  #end h1 { font-size: 44px; }
+  #trophy { display: flex; gap: 60px; }
+  .cup { position: relative; width: 170px; filter: drop-shadow(0 0 25px #ffd700);
+    animation: shine 1.2s ease-in-out infinite alternate; }
+  .cup svg { width: 170px; display: block; }
+  .cupface { position: absolute; left: 50%; top: 65px; transform: translate(-50%, -50%); }
+  .cupface img { width: 72px !important; height: 72px !important; }
+  @keyframes shine { from { transform: rotate(-4deg) scale(1); } to { transform: rotate(4deg) scale(1.07); } }
+  .row { display: flex; gap: 14px; align-items: center; font-size: 28px; }
+  .row span { width: 220px; text-align: right; }
+  button { font: inherit; font-size: 28px; padding: 12px 28px; border-radius: 40px; border: 3px solid #fff3;
+    background: #ffffff14; color: #fff; cursor: pointer; }
+  button.on { background: #f7c843; border-color: #f7c843; color: #2a1600; font-weight: 800; }
+  #start, .again { font-size: 40px; padding: 18px 60px; background: #7f0909; border-color: #f7c843;
+    color: #f7e7b0; font-weight: 800; }
+  #menu { gap: 14px; }
+  #menu h1 { font-size: 58px; }
+  .help { font-size: 19px; opacity: .85; max-width: 1150px; line-height: 1.4; }
+  .keys { font-size: 16px; opacity: .65; margin-top: 4px; }
+  #status { position: fixed; bottom: 20px; left: 0; right: 0; text-align: center; font-size: 26px; }
+  #result { font-size: 26px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="menu" class="overlay">
+  <h1>🧙 Wizard Duel 🧙</h1>
+  <div class="row"><span>Players</span>
+    <button data-players="1">1 player</button><button data-players="2">2 players</button></div>
+  <div class="row" id="lvl0"><span id="lvl0name">Left player</span>
+    <button data-side="0" data-level="easy">Easy</button><button data-side="0" data-level="hard">Hard</button></div>
+  <div class="row" id="lvl1"><span>Right player</span>
+    <button data-side="1" data-level="easy">Easy</button><button data-side="1" data-level="hard">Hard</button></div>
+  <div class="row"><button id="home" onclick="location.href='../../'">🏠 All games</button>
+  <button id="start">Start ▶</button></div>
+  <div class="help">Welcome to the Dueling Club! Silly spells only: bubbles 🫧 feathers 🪶 frogs 🐸 tickles 😆<br>
+    ✨ <b>Right hand = wand.</b> Flick it fast toward the other side to cast a spell.<br>
+    🛡️ <b>Left hand up = shield.</b> Raise it above your shoulder. Protego! Block = +1 point. Hit = +2 points.<br>
+    1 player: duel the wobbly training scarecrow.
+    <div class="keys">Keys: Space = start, Esc = menu, F = full screen, M = music, H = all games.<br>
+    Test: mouse = left wand (click or flick = cast), Z = left cast, hold X = left shield,
+    N = right cast, hold , (comma) = right shield</div></div>
+</div>
+
+<div id="end" class="overlay hidden">
+  <h1 id="endTitle"></h1>
+  <div id="trophy"></div>
+  <div id="result"></div>
+  <button class="again">Play again ▶</button>
+  <button id="toMenu">Menu</button>
+</div>
+
+<div id="status"></div>
+
+<script type="module">
+import { video, startTracking, track as trackPoses } from '../../shared/tracking.js';
+import { KIDS, drawKidFace, kidImg } from '../../shared/kids.js';
+import { recStart, recStop, recCancel } from '../../shared/recorder.js';
+
+const $ = s => document.querySelector(s);
+const canvas = $('#c'), ctx = canvas.getContext('2d');
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+let W, H, S, DPR;
+function resize() {
+  DPR = devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight; S = H / 900;
+  canvas.width = W * DPR; canvas.height = H * DPR; ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  makeHall();
+}
+
+// ---------- settings ----------
+// Balance: the 5-year-old (Easy) gets fast, big spells, a big shield and a small body target.
+// The 10-year-old (Hard) gets slower, smaller spells, a smaller shield and a bigger body target.
+const LEVELS = {
+  easy: { name: 'Easy', speed: 820, r: 34, shield: 100, body: 0.8, cool: 0.6, flick: 1.1 },
+  hard: { name: 'Hard', speed: 560, r: 22, shield: 66, body: 1.15, cool: 0.9, flick: 1.5 },
+};
+// the training scarecrow (1 player): slow soft spells, big target
+const DUMMY = { easy: { every: 3.2, speed: 300, r: 26 }, hard: { every: 2.2, speed: 420, r: 26 } };
+const CATCH_UP = 5; // behind by this many points = spells 50% bigger
+const ROUND = +new URLSearchParams(location.search).get('t') || 35; // ?t=10 = 10 second round
+const FACES = { easy: KIDS.player1, hard: KIDS.player2 }; // Easy = player 1, Hard = player 2
+const COLORS = ['#ff6b5b', '#6fb4ff'];
+const SPELLS = [
+  { k: 'bubbles', word: 'Bubblio!', hit: 'Bubble hair!', col: '#8fe0ff', icon: '🫧' },
+  { k: 'feathers', word: 'Plumifera!', hit: 'Feathers!', col: '#fff4d6', icon: '🪶' },
+  { k: 'frog', word: 'Ribbitus!', hit: 'Froggy hat!', col: '#7be36b', icon: '🐸' },
+  { k: 'tickle', word: 'Rictusempra!', hit: 'Tickle tickle!', col: '#ff8de0', icon: '😆' },
+];
+const FX_TIME = 1.5;
+const settings = { players: 2, levels: ['easy', 'hard'] };
+
+function refreshMenu() {
+  document.querySelectorAll('[data-players]').forEach(b => b.classList.toggle('on', +b.dataset.players === settings.players));
+  document.querySelectorAll('[data-level]').forEach(b => b.classList.toggle('on', settings.levels[b.dataset.side] === b.dataset.level));
+  $('#lvl1').classList.toggle('hidden', settings.players === 1);
+  $('#lvl0name').textContent = settings.players === 1 ? 'Level' : 'Left player';
+}
+document.querySelectorAll('[data-players]').forEach(b => b.onclick = () => { settings.players = +b.dataset.players; refreshMenu(); });
+document.querySelectorAll('[data-level]').forEach(b => b.onclick = () => { settings.levels[b.dataset.side] = b.dataset.level; refreshMenu(); });
+refreshMenu();
+
+// ---------- sound ----------
+let ac;
+function tone(type, f1, f2, dur, vol, delay = 0) {
+  const t = ac.currentTime + delay, o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.connect(g); g.connect(ac.destination);
+  o.frequency.setValueAtTime(f1, t); o.frequency.exponentialRampToValueAtTime(f2, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function laugh(pitch) { // "ha-ha-ha-ha": short buzzy notes through a voice-like filter
+  const f = ac.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1100; f.Q.value = 1.5; f.connect(ac.destination);
+  for (let k = 0; k < 6; k++) {
+    const t = ac.currentTime + k * 0.12, o = ac.createOscillator(), g = ac.createGain();
+    const p = pitch * (1 - k * 0.04);
+    o.type = 'sawtooth'; o.frequency.setValueAtTime(p * 1.15, t); o.frequency.exponentialRampToValueAtTime(p * 0.85, t + 0.09);
+    g.gain.setValueAtTime(0.001, t); g.gain.exponentialRampToValueAtTime(0.5, t + 0.015); g.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+    o.connect(g); g.connect(f); o.start(t); o.stop(t + 0.12);
+  }
+}
+function sfx(kind, pitch = 1) {
+  if (!ac) return;
+  if (kind === 'cast') { tone('sine', 300 * pitch, 1400 * pitch, 0.22, 0.2); tone('triangle', 600 * pitch, 2000 * pitch, 0.18, 0.08, 0.03); }
+  if (kind === 'protego') [1568, 2093, 2637, 3136].forEach((f, i) => tone('sine', f, f * 0.98, 0.3, 0.16, i * 0.04));
+  if (kind === 'hit') { tone('sine', 700, 160, 0.25, 0.3); [1319, 1760].forEach((f, i) => tone('sine', f, f, 0.15, 0.15, 0.05 + i * 0.06)); }
+  if (kind === 'laugh') laugh(420 * pitch);
+  if (kind === 'ribbit') { tone('square', 190, 120, 0.07, 0.12, 0.2); tone('square', 210, 130, 0.08, 0.12, 0.32); }
+  if (kind === 'fizz') tone('triangle', 1800, 400, 0.2, 0.12);
+  if (kind === 'beep') tone('square', 600, 600, 0.12, 0.15);
+  if (kind === 'go') tone('square', 900, 900, 0.3, 0.15);
+  if (kind === 'end') // trumpet fanfare
+    [[523, 0, .15], [523, .18, .15], [523, .36, .15], [698, .54, .35], [880, .92, .2], [784, 1.12, .2], [1047, 1.32, .9]]
+      .forEach(([f, d, len]) => { tone('sawtooth', f, f, len, 0.12, d); tone('triangle', f, f, len, 0.25, d); });
+}
+
+// ---------- background music (made by code: a magic waltz in E minor, 3 beats per bar) ----------
+const MELODY = [76, 79, 83,  84, 83, 79,  81, 76, 72,  75, 78, 71,
+                83, 79, 76,  79, 84, 88,  84, 81, 76,  78, 75, 71];
+const ROOTS = [40, 36, 45, 47], STEP = 60 / 150;
+let musicOn = true, musicTimer = null, musicStep = 0, nextNote = 0, musicGain = null;
+const midi = m => 440 * 2 ** ((m - 69) / 12);
+function note(freq, t, dur, type, vol) {
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.frequency.value = freq; o.connect(g); g.connect(musicGain);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function playStep(i, t) {
+  const m = MELODY[i % 24], beat = i % 3, root = ROOTS[Math.floor(i / 3) % 4];
+  note(midi(m), t, 1.0, 'sine', 0.45); note(midi(m + 12), t, 0.35, 'sine', 0.15); // bell sound
+  if (beat === 0) note(midi(root), t, STEP * 2.5, 'triangle', 0.6);
+  else note(midi(root + 12 + (beat === 1 ? 7 : 12)), t, STEP * 0.8, 'triangle', 0.25);
+}
+// Real music files from Iker (shared/music/, not in git). If a file can't play, the code waltz plays instead.
+const gameSong = new Audio('../../shared/music/game.mp3'), winnerSong = new Audio('../../shared/music/winner.mp3');
+gameSong.loop = true; gameSong.volume = 0.4; winnerSong.volume = 0.7;
+let winnerTimer = null;
+function startMusic() {
+  if (!musicOn) return;
+  stopWinnerSong();
+  gameSong.currentTime = 0;
+  gameSong.play().catch(startSynth);
+}
+function stopMusic() { gameSong.pause(); stopSynth(); }
+function playWinnerSong() {
+  if (!musicOn) return;
+  winnerTimer = setTimeout(() => { winnerSong.currentTime = 0; winnerSong.play().catch(() => {}); }, 2200); // after the trumpet
+}
+function stopWinnerSong() { clearTimeout(winnerTimer); winnerSong.pause(); }
+function startSynth() {
+  if (!ac || !musicOn || musicTimer) return;
+  musicGain = ac.createGain(); musicGain.gain.value = 0.096; musicGain.connect(ac.destination);
+  musicStep = 0; nextNote = ac.currentTime + 0.05;
+  musicTimer = setInterval(() => {
+    while (nextNote < ac.currentTime + 0.12) { playStep(musicStep++, nextNote); nextNote += STEP; }
+  }, 25);
+}
+function stopSynth() {
+  if (!musicTimer) return;
+  clearInterval(musicTimer); musicTimer = null;
+  musicGain.gain.setTargetAtTime(0, ac.currentTime, 0.1);
+}
+
+// ---------- camera + body tracking ----------
+let poses = [];
+const status = t => $('#status').textContent = t;
+const sx = lm => (1 - lm.x) * W, sy = lm => lm.y * H; // camera is mirrored
+
+// ---------- game state ----------
+// A "duelist" is one side of the stage: a player, or the training scarecrow (1 player mode).
+let state = 'menu', timeLeft = 0, countdown = 0, lastBeep = 4;
+let duel = [], spells = [], particles = [], texts = [];
+let mouse = null, mouseT = -1e9;
+const keys = { p0shield: false, p1shield: false };
+
+function makeDuelists() {
+  duel = [];
+  for (let i = 0; i < 2; i++) {
+    const dummy = settings.players === 1 && i === 1;
+    const lvl = settings.levels[dummy ? 0 : i];
+    duel.push({ i, dir: i === 0 ? 1 : -1, dummy, L: LEVELS[lvl], D: DUMMY[lvl], face: dummy ? null : FACES[lvl],
+      color: dummy ? '#e0b860' : COLORS[i], score: 0, hits: 0, blocks: 0, wand: null, hist: [], shield: null,
+      box: null, cool: 0, fx: null, shake: 0, flash: 0, timer: 2.5, kind: Math.floor(rand(0, 4)), wob: 0 });
+  }
+}
+const homeX = d => d.dummy ? W * 0.8 : settings.players === 1 ? W * 0.27 : d.i === 0 ? W * 0.22 : W * 0.78;
+
+// body target box around head + shoulders
+function setBox(d, cx, top, w, h) {
+  const k = d.dummy ? 1 : d.L.body, cy = top + h / 2;
+  d.box = { cx, x0: cx - w / 2 * k, x1: cx + w / 2 * k, y0: cy - h / 2 * k, y1: cy + h / 2 * k };
+}
+
+function assignBodies(now) {
+  const byside = [null, null];
+  for (const p of poses) {
+    const side = settings.players === 1 ? 0 : sx(p[0]) < W / 2 ? 0 : 1;
+    if (!byside[side]) byside[side] = p;
+  }
+  for (const d of duel) {
+    d.wand = null; d.shield = null; d.posed = false;
+    if (d.dummy) {
+      const bx = W * 0.8, top = H * 0.27;
+      setBox(d, bx, top, 250 * S, 360 * S);
+      d.wand = { x: bx - 150 * S, y: top + 150 * S };
+      continue;
+    }
+    const p = byside[d.i], seen = i => p && (p[i].visibility ?? 1) > 0.4;
+    if (p && seen(11) && seen(12)) {
+      d.posed = true;
+      const xa = sx(p[11]), xb = sx(p[12]), sw = Math.max(70 * S, Math.abs(xa - xb));
+      const shY = (sy(p[11]) + sy(p[12])) / 2, nose = sy(p[0]);
+      const top = nose - sw * 0.75;
+      setBox(d, (xa + xb) / 2, top, sw * 1.5, shY + sw * 0.5 - top);
+      if (seen(16)) { const f = seen(20) ? p[20] : p[16]; d.wand = { x: sx(f), y: sy(f) }; }
+      if (seen(15) && p[15].y < p[11].y) d.shield = { x: sx(p[15]), y: sy(p[15]) }; // left wrist above left shoulder
+    } else {
+      setBox(d, homeX(d), H * 0.3, 180 * S, 290 * S);
+    }
+    const b = d.box, w = b.x1 - b.x0;
+    if (!d.wand) d.wand = { x: b.cx + d.dir * (w / 2 + 70 * S), y: b.y0 + (b.y1 - b.y0) * 0.55 };
+    if (d.i === 0 && mouse && now - mouseT < 2500) d.wand = { x: mouse.x, y: mouse.y }; // mouse = test wand
+    if (!d.shield && keys['p' + d.i + 'shield']) d.shield = { x: b.cx + d.dir * (w / 2 + 45 * S), y: b.y0 + (b.y1 - b.y0) * 0.4 };
+  }
+}
+
+// quick wand flick toward the other side = cast a spell in the flick's direction
+function checkFlick(d, now) {
+  if (d.dummy || !d.wand) return;
+  d.hist.push({ t: now, x: d.wand.x, y: d.wand.y });
+  while (d.hist.length && now - d.hist[0].t > 200) d.hist.shift(); // the last 0.2 seconds
+  if (d.hist.length < 2 || state !== 'play' || d.cool > 0) return; // body tracking can be slow (15 frames a second)
+  const a = d.hist[0], b = d.hist[d.hist.length - 1], dt = (b.t - a.t) / 1000;
+  if (dt < 0.04) return;
+  const vx = (b.x - a.x) / dt, vy = (b.y - a.y) / dt;
+  if (vx * d.dir > d.L.flick * H && vx * d.dir > Math.abs(vy) * 0.7) { cast(d, vx, vy); d.hist = []; }
+}
+
+function opp(d) { return duel[1 - d.i]; }
+function cast(d, dx, dy) {
+  if (d.cool > 0 || state !== 'play') return;
+  // straight line, mostly sideways: at most 35 degrees up or down
+  let ang = Math.atan2(dy, Math.abs(dx));
+  ang = clamp(ang, -0.61, 0.61);
+  const sp = (d.dummy ? d.D.speed : d.L.speed) * S;
+  let r = (d.dummy ? d.D.r : d.L.r) * S;
+  if (!d.dummy && !opp(d).dummy && opp(d).score - d.score >= CATCH_UP) r *= 1.5; // catch-up help
+  const kind = SPELLS[d.kind]; d.kind = (d.kind + 1 + Math.floor(rand(0, 3))) % 4;
+  spells.push({ x: d.wand.x, y: d.wand.y, vx: Math.cos(ang) * sp * d.dir, vy: Math.sin(ang) * sp, r, owner: d.i, kind, age: 0 });
+  d.cool = d.dummy ? 0 : d.L.cool;
+  sfx('cast', d.dummy ? 0.7 : d.i === 0 ? 1 : 1.2);
+  texts.push({ x: d.wand.x, y: d.wand.y - 40 * S, t: kind.word, life: 0.9, col: kind.col, size: 28 });
+}
+function aimAt(d) { // keys / scarecrow: aim at the other one's body, then fly straight
+  const o = opp(d).box;
+  const ty = (o.y0 + o.y1) / 2 + (d.dummy ? rand(-0.35, 0.35) * (o.y1 - o.y0) : 0);
+  cast(d, o.cx - d.wand.x, ty - d.wand.y);
+}
+
+function burst(x, y, col, n = 14, sp = 300) {
+  for (let k = 0; k < n; k++) {
+    const a = rand(0, 6.28), v = rand(0.3, 1) * sp * S;
+    particles.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0.6, col, r: rand(3, 7), g: 200 });
+  }
+}
+
+function hitBody(s, d) {
+  const att = duel[s.owner];
+  if (!att.dummy) { att.score += 2; att.hits++; }
+  d.fx = { kind: s.kind.k, t: FX_TIME }; d.shake = 0.5; d.wob = 1;
+  sfx('hit'); sfx('laugh', d.dummy ? 0.6 : d.L === LEVELS.easy ? 1.25 : 1);
+  if (s.kind.k === 'frog') sfx('ribbit');
+  burst(s.x, s.y, s.kind.col, 18);
+  texts.push({ x: d.box.cx, y: d.box.y0 - 20 * S, t: (att.dummy ? '' : '+2 ') + s.kind.hit, life: 1.2, col: att.dummy ? s.kind.col : att.color, size: 40 });
+}
+function block(s, d) {
+  if (!d.dummy) { d.score += 1; d.blocks++; }
+  d.flash = 0.4; s.bounced = true; s.vx = -s.vx * 0.5; s.vy = -Math.abs(s.vy) * 0.5 - 200 * S;
+  sfx('protego');
+  burst(s.x, s.y, '#e8f6ff', 12, 250);
+  texts.push({ x: d.shield.x, y: d.shield.y - 70 * S, t: 'Protego! +1', life: 1.0, col: d.color, size: 40 });
+}
+
+function startGame() {
+  if (!ac) ac = new AudioContext();
+  ac.resume();
+  recStart(canvas, ac, [gameSong, winnerSong]); // record this round (see shared/recorder.js)
+  stopMusic(); startMusic();
+  makeDuelists(); spells = []; particles = []; texts = [];
+  $('#menu').classList.add('hidden'); $('#end').classList.add('hidden');
+  state = 'count'; countdown = 3.99; lastBeep = 4;
+}
+
+function endGame() {
+  recStop();
+  state = 'end'; stopMusic(); sfx('end'); playWinnerSong();
+  const players = duel.filter(d => !d.dummy);
+  const best = Math.max(...players.map(d => d.score)), winners = players.filter(d => d.score === best);
+  $('#endTitle').textContent = players.length === 1 ? `${players[0].face.name}, Champion Duelist!`
+    : winners.length === 2 ? 'A tie! Two champion duelists!' : `${winners[0].face.name} wins the Dueling Cup!`;
+  $('#trophy').innerHTML = winners.map(d => `<div class="cup">${CUP}<div class="cupface">${kidImg(d.face, '#fff6c8')}</div></div>`).join('');
+  $('#result').innerHTML = players.map(d => `<span style="color:${d.color}">${kidImg(d.face, d.color)} ${d.face.name} (${d.L.name}): <b>${d.score}</b> points</span>
+    <span style="font-size:20px;opacity:.85"> — ${d.hits} ${d.hits === 1 ? 'hit' : 'hits'}, ${d.blocks} ${d.blocks === 1 ? 'block' : 'blocks'}</span>`).join('<br>');
+  $('#end').classList.remove('hidden');
+}
+const CUP = `<svg viewBox="0 0 200 240"><defs><linearGradient id="gold" x1="0" x2="1">
+  <stop offset="0" stop-color="#8a5a00"/><stop offset=".35" stop-color="#fff1b0"/><stop offset=".6" stop-color="#f5c542"/>
+  <stop offset="1" stop-color="#8a5a00"/></linearGradient></defs>
+  <path d="M48 35 C5 35 5 105 62 112" fill="none" stroke="url(#gold)" stroke-width="12"/>
+  <path d="M152 35 C195 35 195 105 138 112" fill="none" stroke="url(#gold)" stroke-width="12"/>
+  <path d="M38 20 H162 C162 105 132 135 100 140 C68 135 38 105 38 20Z" fill="url(#gold)"/>
+  <rect x="90" y="138" width="20" height="38" fill="url(#gold)"/>
+  <path d="M62 176 H138 L150 202 H50Z" fill="url(#gold)"/>
+  <rect x="36" y="202" width="128" height="30" rx="5" fill="#7f0909" stroke="#f5c542" stroke-width="3"/>
+  <text x="100" y="223" text-anchor="middle" font-family="Cinzel, Georgia, serif" font-weight="800" font-size="17"
+    fill="#f7e7b0">⚡ CHAMPION ⚡</text></svg>`;
+function toMenu() {
+  recCancel();
+  state = 'menu'; duel = []; spells = []; stopMusic(); stopWinnerSong();
+  $('#end').classList.add('hidden'); $('#menu').classList.remove('hidden');
+}
+
+$('#start').onclick = startGame;
+document.querySelector('.again').onclick = startGame;
+$('#toMenu').onclick = toMenu;
+addEventListener('keydown', e => {
+  if (e.code === 'Space' && state !== 'play' && state !== 'count') startGame();
+  if (e.code === 'Escape') toMenu();
+  if (e.code === 'KeyH') location.href = '../../';
+  if (e.code === 'KeyM') { musicOn = !musicOn; if (musicOn && (state === 'play' || state === 'count')) startMusic(); else { stopMusic(); stopWinnerSong(); } }
+  if (e.code === 'KeyF') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+  if (e.code === 'KeyX') keys.p0shield = true;
+  if (e.code === 'Comma') keys.p1shield = true;
+  if (e.repeat || state !== 'play' || !duel.length) return;
+  if (e.code === 'KeyZ') aimAt(duel[0]);
+  if (e.code === 'KeyN' && !duel[1].dummy) aimAt(duel[1]);
+});
+addEventListener('keyup', e => {
+  if (e.code === 'KeyX') keys.p0shield = false;
+  if (e.code === 'Comma') keys.p1shield = false;
+});
+addEventListener('mousemove', e => { mouse = { x: e.clientX, y: e.clientY }; mouseT = performance.now(); });
+document.addEventListener('mouseleave', () => mouse = null);
+canvas.addEventListener('mousedown', e => { // click = left player casts straight to the right
+  mouse = { x: e.clientX, y: e.clientY }; mouseT = performance.now();
+  if (state === 'play' && duel.length) { duel[0].wand = { ...mouse }; cast(duel[0], 1, 0); }
+});
+
+// ---------- update ----------
+function update(dt, now) {
+  if (state === 'count') {
+    countdown -= dt;
+    const n = Math.ceil(countdown);
+    if (n < lastBeep) { lastBeep = n; sfx(n > 0 ? 'beep' : 'go'); }
+    if (countdown <= 0) { state = 'play'; timeLeft = ROUND; }
+  } else if (state === 'play') {
+    timeLeft -= dt;
+    if (timeLeft <= 0) { timeLeft = 0; endGame(); }
+  }
+  if (!duel.length) return updateParticles(dt);
+  assignBodies(now);
+
+  for (const d of duel) {
+    d.cool = Math.max(0, d.cool - dt); d.shake = Math.max(0, d.shake - dt); d.flash = Math.max(0, d.flash - dt);
+    d.wob = Math.max(0, d.wob - dt * 0.8);
+    if (d.fx) { d.fx.t -= dt; if (d.fx.t <= 0) d.fx = null; }
+    checkFlick(d, now);
+    if (d.dummy && state === 'play') {
+      d.timer -= dt;
+      if (d.timer <= 0) { aimAt(d); d.timer = d.D.every * rand(0.8, 1.25); }
+    }
+    if (d.wand && !d.dummy) // magic sparkles from the wand
+      particles.push({ x: d.wand.x + rand(-8, 8) * S, y: d.wand.y + rand(-8, 8) * S, vx: rand(-50, 50) * S, vy: rand(-50, 20) * S,
+        life: 0.4, col: Math.random() < 0.5 ? '#fff1b0' : d.color, r: rand(2, 4) });
+  }
+
+  for (const s of spells) {
+    s.age += dt; s.x += s.vx * dt; s.y += s.vy * dt;
+    if (s.bounced) { s.vy += 900 * S * dt; s.fade = (s.fade || 0) + dt; if (s.fade > 0.6) s.dead = true; continue; }
+    if (Math.random() < 0.7) particles.push({ x: s.x, y: s.y, vx: rand(-30, 30) * S, vy: rand(-30, 30) * S, life: 0.35, col: s.kind.col, r: rand(2, 5) * (s.r / (30 * S)), g: 0 });
+    if (s.x < -80 || s.x > W + 80 || s.y < -80 || s.y > H + 80) { s.dead = true; continue; }
+    if (state !== 'play') continue;
+    const d = duel[1 - s.owner];
+    if (d.shield && Math.hypot(s.x - d.shield.x, s.y - d.shield.y) < s.r + d.L.shield * S && !d.dummy) { block(s, d); continue; }
+    const b = d.box, nx = clamp(s.x, b.x0, b.x1), ny = clamp(s.y, b.y0, b.y1);
+    if (Math.hypot(s.x - nx, s.y - ny) < s.r) { s.dead = true; hitBody(s, d); }
+  }
+  // two spells meet in the air: both fizzle into sparkles
+  for (const a of spells) for (const b of spells)
+    if (a.owner === 0 && b.owner === 1 && !a.dead && !b.dead && !a.bounced && !b.bounced && Math.hypot(a.x - b.x, a.y - b.y) < a.r + b.r) {
+      a.dead = b.dead = true; burst((a.x + b.x) / 2, (a.y + b.y) / 2, '#fff6c8', 20, 350); sfx('fizz');
+      texts.push({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 - 30 * S, t: '✨ Poof! ✨', life: 0.8, col: '#fff6c8', size: 32 });
+    }
+  spells = spells.filter(s => !s.dead);
+  updateParticles(dt);
+}
+function updateParticles(dt) {
+  if (state === 'end' && Math.random() < 0.6) // golden confetti for the champion
+    particles.push({ x: rand(0, W), y: -10, vx: rand(-40, 40) * S, vy: rand(50, 150) * S, life: 3,
+      col: ['#f7c843', '#fff1b0', '#ff6b5b', '#ffffff'][Math.floor(rand(0, 4))], r: rand(3, 7), g: 20 });
+  for (const p of particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += (p.g ?? 500) * S * dt; p.life -= dt; }
+  particles = particles.filter(p => p.life > 0);
+  for (const t of texts) { t.y -= 70 * S * dt; t.life -= dt; }
+  texts = texts.filter(t => t.life > 0);
+}
+
+// ---------- the Great Hall (drawn once into a hidden picture, then copied every frame) ----------
+const hall = document.createElement('canvas'), hctx = hall.getContext('2d');
+const glow = document.createElement('canvas'); // soft candle glow, made once (no shadowBlur per frame)
+glow.width = glow.height = 64;
+{ const g = glow.getContext('2d'), gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gr.addColorStop(0, 'rgba(255,210,120,.55)'); gr.addColorStop(1, 'rgba(255,180,80,0)'); g.fillStyle = gr; g.fillRect(0, 0, 64, 64); }
+const candles = Array.from({ length: 12 }, (_, k) => ({ x: 0.2 + 0.6 * (k + 0.5) / 12 + rand(-0.015, 0.015), y: rand(0.13, 0.26), p: rand(0, 6.28), h: rand(26, 40) }));
+const BANNERS = [[0.045, '#7f0909', '#f7c843', '🦁'], [0.125, '#1a472a', '#c0c0c0', '🐍'], [0.875, '#0e1a40', '#b08d57', '🦅'], [0.955, '#c9a400', '#2b2b2b', '🦡']];
+function makeHall() {
+  hall.width = W * DPR; hall.height = H * DPR;
+  const c = hctx; c.setTransform(DPR, 0, 0, DPR, 0, 0); c.clearRect(0, 0, W, H);
+  // enchanted ceiling at the top, fading down so the kids stay visible in the middle
+  const sky = c.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, 'rgba(10,6,40,.92)'); sky.addColorStop(.3, 'rgba(30,15,55,.55)');
+  sky.addColorStop(.6, 'rgba(30,15,40,.2)'); sky.addColorStop(1, 'rgba(25,12,20,.35)');
+  c.fillStyle = sky; c.fillRect(0, 0, W, H);
+  c.fillStyle = '#fff';
+  for (let k = 0; k < 90; k++) { c.globalAlpha = rand(0.3, 1); c.beginPath(); c.arc(rand(0, W), rand(0, H * 0.14), rand(0.6, 2) * S, 0, 7); c.fill(); }
+  c.globalAlpha = 1;
+  // stone side walls with tall windows
+  for (const side of [0, 1]) {
+    const x0 = side ? W * 0.985 : 0, w = W * 0.015;
+    c.fillStyle = 'rgba(40,30,30,.8)'; c.fillRect(x0, 0, w, H);
+  }
+  // house banners
+  for (const [fx, col, trim, icon] of BANNERS) {
+    const x = fx * W, bw = W * 0.06, bh = H * 0.3, y = H * 0.02;
+    c.fillStyle = '#5a3a1a'; c.fillRect(x - bw * 0.65, y - 4 * S, bw * 1.3, 8 * S);
+    c.fillStyle = col; c.strokeStyle = trim; c.lineWidth = 4 * S;
+    c.beginPath(); c.moveTo(x - bw / 2, y); c.lineTo(x + bw / 2, y); c.lineTo(x + bw / 2, y + bh);
+    c.lineTo(x, y + bh * 0.85); c.lineTo(x - bw / 2, y + bh); c.closePath(); c.fill(); c.stroke();
+    c.font = `${bw * 0.6}px serif`; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(icon, x, y + bh * 0.4);
+  }
+  // the long dueling stage at the bottom
+  const top = H * 0.84;
+  const wood = c.createLinearGradient(0, top, 0, H);
+  wood.addColorStop(0, 'rgba(120,72,30,.85)'); wood.addColorStop(1, 'rgba(60,32,12,.92)');
+  c.fillStyle = wood; c.beginPath(); c.moveTo(W * 0.04, top); c.lineTo(W * 0.96, top); c.lineTo(W, H); c.lineTo(0, H); c.closePath(); c.fill();
+  c.strokeStyle = 'rgba(30,15,5,.6)'; c.lineWidth = 2 * S;
+  for (let k = 1; k < 4; k++) { const y = top + (H - top) * k / 4; c.beginPath(); c.moveTo(0, y); c.lineTo(W, y); c.stroke(); }
+  for (let k = 1; k < 12; k++) { const t = k / 12; c.beginPath(); c.moveTo(W * (0.04 + 0.92 * t), top); c.lineTo(W * t, H); c.stroke(); }
+  c.fillStyle = '#d9a93a'; c.fillRect(W * 0.04, top - 3 * S, W * 0.92, 6 * S);
+  c.font = `800 ${22 * S}px "Cinzel Decorative", Georgia, serif`; c.fillStyle = 'rgba(247,200,67,.8)';
+  c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.fillText('✦ DUELING CLUB ✦', W / 2, top + (H - top) * 0.72);
+}
+document.fonts?.ready.then(() => makeHall());
+addEventListener('resize', resize); resize();
+
+function drawHall(t) {
+  ctx.drawImage(hall, 0, 0, W, H);
+  for (const cd of candles) { // floating candles
+    const x = cd.x * W, y = cd.y * H + Math.sin(t * 0.8 + cd.p) * 6 * S, h = cd.h * S;
+    ctx.drawImage(glow, x - 30 * S, y - 34 * S, 60 * S, 60 * S);
+    ctx.fillStyle = '#f4ecd8'; ctx.fillRect(x - 4 * S, y, 8 * S, h);
+    const fl = 1 + Math.sin(t * 13 + cd.p) * 0.15;
+    ctx.fillStyle = '#ffcf5a'; ctx.beginPath(); ctx.ellipse(x, y - 6 * S, 4 * S, 8 * S * fl, 0, 0, 7); ctx.fill();
+  }
+  // the middle line between the duelists
+  if (settings.players === 2 || duel.length) {
+    ctx.strokeStyle = 'rgba(247,200,67,.45)'; ctx.lineWidth = 4 * S; ctx.setLineDash([20 * S, 16 * S]);
+    ctx.beginPath(); ctx.moveTo(W / 2, H * 0.12); ctx.lineTo(W / 2, H * 0.84); ctx.stroke(); ctx.setLineDash([]);
+  }
+}
+
+function starPath(R, r) {
+  ctx.beginPath();
+  for (let k = 0; k < 10; k++) { const a = k * Math.PI / 5 - Math.PI / 2, rr = k % 2 ? r : R; ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); }
+  ctx.closePath();
+}
+function emoji(ch, x, y, size, rot = 0) {
+  ctx.save(); ctx.translate(x, y); if (rot) ctx.rotate(rot);
+  ctx.font = `${size}px serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(ch, 0, 0); ctx.restore();
+}
+
+function drawScarecrow(d, t) {
+  const b = d.box, cx = b.cx, base = H * 0.86;
+  const ang = Math.sin(t * 1.6) * 0.06 + Math.sin(t * 9) * 0.25 * d.wob;
+  ctx.save(); ctx.translate(cx, base); ctx.rotate(ang); ctx.translate(-cx, -base);
+  const headY = b.y0 + 70 * S, shY = headY + 95 * S;
+  ctx.fillStyle = '#6b4423'; ctx.fillRect(cx - 8 * S, headY, 16 * S, base - headY); // pole
+  ctx.fillRect(cx - 150 * S, shY - 6 * S, 300 * S, 12 * S); // arms stick
+  ctx.strokeStyle = '#e8c860'; ctx.lineWidth = 4 * S; // straw hands
+  for (const sd of [-1, 1]) for (let k = -2; k <= 2; k++) {
+    ctx.beginPath(); ctx.moveTo(cx + sd * 145 * S, shY); ctx.lineTo(cx + sd * (175 + rand(-3, 3)) * S, shY + k * 9 * S); ctx.stroke();
+  }
+  // robe (old sack)
+  ctx.fillStyle = '#4b3a6b'; ctx.beginPath();
+  ctx.moveTo(cx - 55 * S, shY - 10 * S); ctx.lineTo(cx + 55 * S, shY - 10 * S); ctx.lineTo(cx + 85 * S, shY + 190 * S);
+  for (let k = 0; k <= 6; k++) ctx.lineTo(cx + (85 - k * 170 / 6) * S, shY + (190 + (k % 2 ? 18 : 0)) * S);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#f7c843'; for (const [ox, oy] of [[-25, 40], [20, 90], [-10, 140]]) emoji('★', cx + ox * S, shY + oy * S, 22 * S);
+  // sack head with a stitched smile
+  ctx.fillStyle = '#d8b878'; ctx.beginPath(); ctx.arc(cx, headY, 52 * S, 0, 7); ctx.fill();
+  ctx.strokeStyle = '#6b4423'; ctx.lineWidth = 4 * S;
+  for (const ex of [-18, 18]) { ctx.beginPath(); ctx.moveTo(cx + (ex - 7) * S, headY - 14 * S); ctx.lineTo(cx + (ex + 7) * S, headY);
+    ctx.moveTo(cx + (ex + 7) * S, headY - 14 * S); ctx.lineTo(cx + (ex - 7) * S, headY); ctx.stroke(); }
+  ctx.beginPath(); ctx.arc(cx, headY + 10 * S, 24 * S, 0.3, Math.PI - 0.3); ctx.stroke();
+  // pointy wizard hat
+  ctx.fillStyle = '#3a2a6b'; ctx.beginPath(); ctx.moveTo(cx - 70 * S, headY - 38 * S); ctx.lineTo(cx + 70 * S, headY - 38 * S);
+  ctx.lineTo(cx + 20 * S, headY - 150 * S); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#f7c843'; emoji('☾', cx + 5 * S, headY - 80 * S, 28 * S);
+  ctx.restore();
+  // its wand, glowing brighter just before it casts (so the kid can get ready)
+  const w = d.wand, warn = state === 'play' && d.timer < 0.7;
+  ctx.strokeStyle = '#5a3a1a'; ctx.lineWidth = 6 * S; ctx.beginPath(); ctx.moveTo(w.x + 30 * S, w.y + 20 * S); ctx.lineTo(w.x, w.y); ctx.stroke();
+  ctx.fillStyle = warn ? '#fff6c8' : '#e0b860';
+  ctx.beginPath(); ctx.arc(w.x, w.y, (warn ? 14 + Math.sin(t * 30) * 4 : 7) * S, 0, 7); ctx.fill();
+}
+
+function drawShield(d, t) {
+  const sh = d.shield, R = d.L.shield * S;
+  ctx.save(); ctx.translate(sh.x, sh.y);
+  const g = ctx.createRadialGradient(0, 0, R * 0.2, 0, 0, R);
+  g.addColorStop(0, 'rgba(220,240,255,.08)'); g.addColorStop(0.75, `rgba(170,215,255,${0.25 + d.flash})`); g.addColorStop(1, `rgba(230,245,255,${0.6 + d.flash})`);
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, R, 0, 7); ctx.fill();
+  ctx.strokeStyle = d.flash > 0 ? '#fff' : d.color; ctx.lineWidth = (4 + d.flash * 20) * S; ctx.stroke();
+  ctx.rotate(t * 1.5); ctx.fillStyle = '#ffffffcc'; // little runes going round
+  for (let k = 0; k < 6; k++) { ctx.rotate(Math.PI / 3); ctx.beginPath(); ctx.arc(R * 0.82, 0, 4 * S, 0, 7); ctx.fill(); }
+  ctx.restore();
+}
+
+function drawWand(d, t) {
+  const w = d.wand, R = 30 * S;
+  ctx.save(); ctx.translate(w.x, w.y);
+  if (d.cool > 0) { // recharge ring
+    ctx.strokeStyle = 'rgba(255,255,255,.7)'; ctx.lineWidth = 5 * S;
+    ctx.beginPath(); ctx.arc(0, 0, R * 1.35, -Math.PI / 2, -Math.PI / 2 + 6.283 * (1 - d.cool / d.L.cool)); ctx.stroke();
+  }
+  ctx.rotate(t * 2.5);
+  ctx.shadowColor = d.color; ctx.shadowBlur = 24 * S; ctx.fillStyle = d.cool > 0 ? '#bbb4a0' : '#fff6c8';
+  starPath(R, R * 0.45); ctx.fill();
+  ctx.shadowBlur = 0; ctx.lineWidth = 3 * S; ctx.strokeStyle = d.color; ctx.stroke();
+  ctx.restore();
+}
+
+function drawSpell(s) {
+  const a = s.bounced ? Math.max(0, 1 - s.fade / 0.6) : 1;
+  ctx.globalAlpha = a;
+  const g = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, s.r * 1.5);
+  g.addColorStop(0, '#ffffff'); g.addColorStop(0.45, s.kind.col); g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(s.x, s.y, s.r * 1.5, 0, 7); ctx.fill();
+  emoji(s.kind.icon, s.x, s.y, s.r * 1.1, Math.sin(s.age * 10) * 0.3);
+  ctx.globalAlpha = 1;
+}
+
+// silly effect on someone who got hit (1.5 seconds)
+function drawFx(d, t) {
+  const fx = d.fx, b = d.box, age = FX_TIME - fx.t, hw = (b.x1 - b.x0) / 2;
+  const hx = b.cx, hy = d.dummy ? b.y0 + 70 * S : b.y0 + (b.y1 - b.y0) * 0.25;
+  ctx.globalAlpha = Math.min(1, fx.t * 3);
+  if (fx.kind === 'bubbles') {
+    for (let k = 0; k < 14; k++) {
+      const a = k / 14 * 6.283 + age * 1.2, rr = hw * (0.75 + 0.15 * Math.sin(k * 3 + age * 4));
+      const x = hx + Math.cos(a) * rr, y = hy - 10 * S + Math.sin(a) * rr * 0.55 - ((age * 50 + k * 17) % 50) * S;
+      const r = (10 + (k * 7) % 12) * S;
+      ctx.fillStyle = 'rgba(160,225,255,.3)'; ctx.strokeStyle = 'rgba(220,245,255,.9)'; ctx.lineWidth = 2 * S;
+      ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(x - r * 0.35, y - r * 0.35, r * 0.2, 0, 7); ctx.fill();
+    }
+  } else if (fx.kind === 'feathers') {
+    const hgt = b.y1 - b.y0 + 80 * S;
+    for (let k = 0; k < 9; k++) {
+      const x = hx + Math.sin(k * 2.1 + age * 2.5) * hw * 1.1, y = b.y0 - 40 * S + ((age * 110 + k * 40) * S) % hgt;
+      emoji('🪶', x, y, 36 * S, Math.sin(age * 4 + k) * 0.8);
+    }
+  } else if (fx.kind === 'frog') {
+    const bob = Math.abs(Math.sin(age * 7)) * 18 * S;
+    emoji('🐸', hx, (d.dummy ? b.y0 + 10 * S : b.y0 + 5 * S) - bob, 80 * S);
+    if (age % 0.6 < 0.35) { ctx.font = `700 ${24 * S}px "Cinzel", Georgia, serif`; ctx.fillStyle = '#9cf58a'; ctx.textAlign = 'center';
+      ctx.fillText('Ribbit!', hx + hw + 20 * S, b.y0 - 10 * S); }
+  } else {
+    emoji('😆', hx + Math.sin(age * 30) * 8 * S, hy, 70 * S);
+    ctx.font = `800 ${30 * S}px "Cinzel", Georgia, serif`; ctx.fillStyle = '#ff9be6'; ctx.textAlign = 'center';
+    ctx.fillText('hee hee!', hx - hw - 10 * S + Math.sin(age * 20) * 6 * S, hy - 50 * S);
+    ctx.fillText('ha ha!', hx + hw + 10 * S, hy + 30 * S + Math.sin(age * 20) * 6 * S);
+    emoji('🪶', hx + hw * 0.8, hy + 60 * S + Math.sin(age * 25) * 10 * S, 34 * S, Math.sin(age * 25));
+  }
+  ctx.globalAlpha = 1;
+}
+
+// her face floats above her head so everyone sees who is who
+function drawTag(d) {
+  const b = d.box, x = b.cx, y = b.y0 - 60 * S, r = 36 * S;
+  if (d.face.img.naturalWidth) drawKidFace(ctx, d.face, x, y, r, d.color);
+  else {
+    ctx.fillStyle = d.color; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 3 * S; ctx.stroke();
+    ctx.fillStyle = '#fff'; ctx.font = `800 ${28 * S}px "Cinzel", Georgia, serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('P' + (d.i + 1), x, y + 2 * S);
+  }
+  ctx.fillStyle = d.color; ctx.beginPath(); ctx.moveTo(x - 10 * S, y + r + 2 * S); ctx.lineTo(x + 10 * S, y + r + 2 * S); ctx.lineTo(x, y + r + 16 * S); ctx.fill();
+}
+
+function drawHud(d) {
+  const cx = d.i === 0 ? W * 0.27 : W * 0.73;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  if (d.dummy) {
+    ctx.font = `700 ${28 * S}px "Cinzel Decorative", Georgia, serif`; ctx.fillStyle = '#e0b860';
+    ctx.fillText('Training Scarecrow', cx, 30 * S); return;
+  }
+  ctx.fillStyle = d.color; ctx.font = `800 ${66 * S}px "Cinzel Decorative", Georgia, serif`;
+  ctx.fillText(d.score, cx + 45 * S, 14 * S);
+  if (d.face.img.naturalWidth) drawKidFace(ctx, d.face, cx - 50 * S, 52 * S, 40 * S, d.color);
+  ctx.font = `600 ${22 * S}px "Cinzel Decorative", Georgia, serif`; ctx.fillStyle = '#fff'; ctx.textBaseline = 'top';
+  ctx.fillText(d.face.name + ' · ' + d.L.name, cx, 98 * S);
+  const o = opp(d);
+  if (!o.dummy && o.score - d.score >= CATCH_UP) {
+    ctx.fillStyle = '#ffe680'; ctx.font = `700 ${20 * S}px "Cinzel", Georgia, serif`; ctx.fillText('✨ Big spells! ✨', cx, 126 * S);
+  }
+}
+
+function draw(now) {
+  const t = now / 1000;
+  ctx.fillStyle = '#120a24'; ctx.fillRect(0, 0, W, H);
+  if (video.readyState >= 2) { // camera picture, mirrored
+    ctx.save(); ctx.globalAlpha = 0.55; ctx.translate(W, 0); ctx.scale(-1, 1);
+    ctx.drawImage(video, 0, 0, W, H); ctx.restore();
+  }
+  drawHall(t);
+
+  for (const d of duel) {
+    ctx.save();
+    if (d.shake > 0 && !d.dummy) ctx.translate(Math.sin(d.shake * 70) * 10 * S, 0);
+    if (d.dummy) drawScarecrow(d, t);
+    else {
+      if (!d.posed) { // nobody seen on this side (test mode): show where the body target is
+        const b = d.box; ctx.strokeStyle = d.color + '88'; ctx.lineWidth = 3 * S; ctx.setLineDash([10 * S, 8 * S]);
+        ctx.strokeRect(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0); ctx.setLineDash([]);
+      }
+      drawTag(d);
+    }
+    if (d.fx) drawFx(d, t);
+    ctx.restore();
+  }
+  for (const s of spells) drawSpell(s);
+  for (const d of duel) {
+    if (d.shield) drawShield(d, t);
+    if (d.wand && !d.dummy) drawWand(d, t);
+  }
+
+  for (const p of particles) {
+    ctx.globalAlpha = Math.min(1, Math.max(0, p.life / 0.6)); ctx.fillStyle = p.col;
+    ctx.beginPath(); ctx.arc(p.x, p.y, (p.r || 6) * S, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  for (const tx of texts) {
+    ctx.globalAlpha = Math.max(0, Math.min(1, tx.life / 0.5)); ctx.fillStyle = tx.col;
+    ctx.font = `800 ${(tx.size || 40) * S}px "Cinzel Decorative", Georgia, serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.strokeStyle = 'rgba(20,10,30,.8)'; ctx.lineWidth = 5 * S; ctx.strokeText(tx.t, tx.x, tx.y); ctx.fillText(tx.t, tx.x, tx.y);
+  }
+  ctx.globalAlpha = 1;
+  for (const d of duel) drawHud(d);
+
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#fff';
+  if (state === 'play') {
+    ctx.font = `800 ${40 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillStyle = timeLeft < 10 ? '#ff6b6b' : '#fff';
+    ctx.fillText('⌛ ' + Math.ceil(timeLeft), W / 2, H * 0.84 - 34 * S);
+  }
+  if (state === 'count') {
+    const n = Math.ceil(countdown);
+    ctx.font = `900 ${240 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillText(n > 0 ? n : 'GO!', W / 2, H / 2);
+    ctx.font = `600 ${34 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillText(settings.players === 2 ? 'Bow to your partner. Wands ready!' : 'Stand on the left. Wand ready!', W / 2, H / 2 + 160 * S);
+    ctx.font = `600 ${26 * S}px "Cinzel", Georgia, serif`;
+    ctx.fillText('Flick your wand to cast ✨   Left hand up = shield 🛡️', W / 2, H / 2 + 210 * S);
+  }
+}
+
+// ---------- main loop ----------
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  poses = trackPoses(now); update(dt, now); draw(now);
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+startTracking(status);
+window.duelState = () => state; // for headless tests
+window.duelInfo = () => ({ spells: spells.length, d: duel.map(d => [d.score, d.hits, d.blocks, d.cool > 0]) });
+</script>
+</body>
+</html>

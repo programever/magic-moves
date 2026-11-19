@@ -33,11 +33,13 @@
   <a class="game" href="games/spiders/"><div class="icon">🕸️</div><div class="name">Escape the Spiders</div><div class="key">press 6</div></a>
   <a class="game" href="games/hat/"><div class="icon">🎩</div><div class="name">Sorting Hat Dance</div><div class="key">press 7</div></a>
   <a class="game" href="games/spells/"><div class="icon">🔮</div><div class="name">Spell Class</div><div class="key">press 8</div></a>
+  <a class="game" href="games/owls/"><div class="icon">🦉</div><div class="name">Hedwig Post</div><div class="key">press 9</div></a>
+  <a class="game" href="games/duel/"><div class="icon">🧙</div><div class="name">Wizard Duel</div><div class="key">press 0</div></a>
   <a class="game soon"><div class="icon">🎁</div><div class="name">More coming…</div></a>
 </div>
 <script>
   const games = [...document.querySelectorAll('a.game[href]')];
-  addEventListener('keydown', e => { const g = games[+e.key - 1]; if (g) location.href = g.href; });
+  addEventListener('keydown', e => { const g = games[e.key === '0' ? 9 : +e.key - 1]; if (g) location.href = g.href; });
 </script>
 </body>
 </html>

@@ -67,6 +67,7 @@
 <script type="module">
 import { video, startTracking, track as trackPoses } from '../../shared/tracking.js';
 import { KIDS, drawKidFace, kidImg } from '../../shared/kids.js';
+import { recStart, recStop, recCancel } from '../../shared/recorder.js';
 
 const $ = s => document.querySelector(s);
 const canvas = $('#c'), ctx = canvas.getContext('2d');
@@ -321,6 +322,7 @@ function assignHands() {
 function startGame() {
   if (!ac) ac = new AudioContext();
   ac.resume();
+  recStart(canvas, ac, [gameSong, winnerSong]); // record this round (see shared/recorder.js)
   stopMusic(); startMusic();
   makeZones(); particles = []; texts = []; bgFor = -1;
   $('#menu').classList.add('hidden'); $('#end').classList.add('hidden');
@@ -329,6 +331,7 @@ function startGame() {
 let lastBeep = 4;
 
 function endGame() {
+  recStop();
   state = 'end'; stopMusic(); sfx('end'); playWinnerSong();
   const best = Math.max(...zones.map(z => z.score)), winners = zones.filter(z => z.score === best);
   $('#endTitle').textContent = zones.length === 1 ? `${zones[0].face.name}, Charms Champion!`
@@ -351,6 +354,7 @@ const CUP = `<svg viewBox="0 0 200 240"><defs><linearGradient id="gold" x1="0" x
     fill="#f7e7b0">⚡ CHAMPION ⚡</text></svg>`;
 const faceImg = kidImg;
 function toMenu() {
+  recCancel();
   state = 'menu'; zones = []; stopMusic(); stopWinnerSong(); bgFor = -1;
   $('#end').classList.add('hidden'); $('#menu').classList.remove('hidden');
 }
