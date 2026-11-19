@@ -1,4 +1,4 @@
-// Records each round: the CAMERA picture + the MICROPHONE sound of the room (no game picture, no game music).
+// Records each round (from 5 s after the start): the CAMERA picture + the MICROPHONE sound of the room (no game picture, no game music).
 // The video lives only in memory: on the end screen the kids can "Replay" or "Save video" (goes to Downloads).
 // If nobody saves it, it is thrown away when the next round starts, the menu opens or the page closes.
 //
@@ -6,7 +6,8 @@
 // Games call recStart(canvas, ac, [gameSong, winnerSong]); only the songs are used (paused during a replay).
 import { video } from './tracking.js';
 
-let rec = null, chunks = [], url = null, mic = null, micAsked = false, songs = [];
+const SKIP = 5000; // do not record the first 5 seconds of a round (the 3-2-1 countdown and getting ready)
+let rec = null, chunks = [], url = null, mic = null, micAsked = false, songs = [], waitTimer = null, round = 0;
 
 // Ask for the microphone once (Chrome remembers "Allow" for this page). No microphone = video without sound.
 async function getMic() {
@@ -24,7 +25,13 @@ export async function recStart(_canvas, _ac, songList = []) {
   if (!window.MediaRecorder) return;
   const cam = video.srcObject;
   if (!cam || !cam.getVideoTracks().length) return; // camera not ready: no recording this round
+  const me = round, t0 = performance.now();
   const m = await getMic();
+  if (me !== round) return; // cancelled while waiting
+  waitTimer = setTimeout(() => { if (me === round) begin(cam, m); }, Math.max(0, SKIP - (performance.now() - t0)));
+}
+
+function begin(cam, m) {
   try {
     const stream = new MediaStream([...cam.getVideoTracks(), ...(m ? m.getAudioTracks() : [])]);
     const type = ['video/webm;codecs=vp8,opus', 'video/webm'].find(t => MediaRecorder.isTypeSupported(t));
@@ -37,6 +44,7 @@ export async function recStart(_canvas, _ac, songList = []) {
 }
 
 export function recStop() {
+  clearTimeout(waitTimer);
   const r = rec;
   if (!r || r.state === 'inactive') return;
   r.onstop = () => {
@@ -49,6 +57,7 @@ export function recStop() {
 }
 
 export function recCancel() { // throw the video away
+  clearTimeout(waitTimer); round++;
   if (rec && rec.state !== 'inactive') { rec.onstop = null; rec.stop(); }
   rec = null; chunks = [];
   if (url) { URL.revokeObjectURL(url); url = null; }
