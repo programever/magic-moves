@@ -20,6 +20,7 @@ games/<name>/        one folder per game (index.html + its own music/pictures)
   dino/              Forbidden Forest Run: jump over roots, duck under bats (2 players = top/bottom lanes)
   run/               Run to Hogsmeade: run in place (knees up) to race from Hogwarts to Hogsmeade
   jacks/             Jumping Jack Spell: jumping jacks light up the Great Hall, 10 = Lumos Maxima
+  sword/             Sword of Gryffindor: swing both hands to slash flying cursed objects, not Hedwig
 shared/              used by every game
   recorder.js        records the camera + microphone each round; end screen: Replay / Save video (else deleted)
   tracking.js        camera + body tracking (MediaPipe pose, 2 players)

@@ -1,0 +1,813 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Sword of Gryffindor</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Cinzel:wght@600;800&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; height: 100%; background: #0a1410; overflow: hidden;
+    font-family: "Cinzel", Georgia, serif; color: #fff; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; }
+  video { display: none; }
+  .overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 16px; background: rgba(8, 18, 14, .86); text-align: center; }
+  .hidden { display: none !important; }
+  h1 { font-family: "Cinzel Decorative", Georgia, serif; font-size: 60px; margin: 0; color: #f7c843;
+    text-shadow: 0 0 25px #ffb30088; }
+  #end { background: rgba(8, 18, 14, .55); gap: 10px; }
+  #end h1 { font-size: 44px; }
+  #trophy { display: flex; gap: 60px; }
+  .cup { position: relative; width: 170px; filter: drop-shadow(0 0 25px #ffd700);
+    animation: shine 1.2s ease-in-out infinite alternate; }
+  .cup svg { width: 170px; display: block; }
+  .cupface { position: absolute; left: 50%; top: 65px; transform: translate(-50%, -50%); }
+  .cupface img { width: 72px !important; height: 72px !important; }
+  @keyframes shine { from { transform: rotate(-4deg) scale(1); } to { transform: rotate(4deg) scale(1.07); } }
+  .row { display: flex; gap: 14px; align-items: center; font-size: 28px; }
+  .row span { width: 220px; text-align: right; }
+  button { font: inherit; font-size: 28px; padding: 12px 28px; border-radius: 40px; border: 3px solid #fff3;
+    background: #ffffff14; color: #fff; cursor: pointer; }
+  button.on { background: #f7c843; border-color: #f7c843; color: #2a1600; font-weight: 800; }
+  #start, .again { font-size: 40px; padding: 18px 60px; background: #7f0909; border-color: #f7c843;
+    color: #f7e7b0; font-weight: 800; }
+  .help { font-size: 22px; opacity: .8; max-width: 1000px; line-height: 1.5; }
+  #status { position: fixed; bottom: 20px; left: 0; right: 0; text-align: center; font-size: 26px; }
+  #result { font-size: 28px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="menu" class="overlay">
+  <h1>⚔️ Sword of Gryffindor ⚔️</h1>
+  <div class="row"><span>Players</span>
+    <button data-players="1">1 player</button><button data-players="2">2 players</button></div>
+  <div class="row" id="lvl0"><span id="lvl0name">Left player</span>
+    <button data-side="0" data-level="easy">Easy</button><button data-side="0" data-level="hard">Hard</button></div>
+  <div class="row" id="lvl1"><span>Right player</span>
+    <button data-side="1" data-level="easy">Easy</button><button data-side="1" data-level="hard">Hard</button></div>
+  <button id="home" onclick="location.href='../../'">🏠 All games</button>
+  <button id="start">Start ▶</button>
+  <div class="help">Sword in BOTH hands ⚔️ SWING fast to slash cursed things: +1, golden = +3, 3 in one swing = COMBO!<br>
+    Hard: don't slash Hedwig 🦉 or a Chocolate Frog 🐸 (minus 1).<br>
+    Keys: Space start, Esc menu, F full screen, M music, C camera, H all games. Test: mouse = sword</div>
+</div>
+
+<div id="end" class="overlay hidden">
+  <h1 id="endTitle"></h1>
+  <div id="trophy"></div>
+  <div id="result"></div>
+  <button class="again">Play again ▶</button>
+  <button id="toMenu">Menu</button>
+</div>
+
+<div id="status"></div>
+
+<script type="module">
+import { video, startTracking, track as trackPoses } from '../../shared/tracking.js';
+import { KIDS, drawKidFace, kidImg } from '../../shared/kids.js';
+import { recStart, recStop, recCancel } from '../../shared/recorder.js';
+import { look, nextLook, drawCameraOver, setupLookMenu } from '../../shared/look.js';
+
+const $ = s => document.querySelector(s);
+const canvas = $('#c'), ctx = canvas.getContext('2d');
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+let W, H, S;
+const bg = document.createElement('canvas'), bgx = bg.getContext('2d'); // the Chamber of Secrets door (painted once)
+function resize() {
+  const d = devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight; S = H / 900;
+  canvas.width = W * d; canvas.height = H * d; ctx.setTransform(d, 0, 0, d, 0, 0);
+  bg.width = W * d; bg.height = H * d; bgx.setTransform(d, 0, 0, d, 0, 0);
+  paintChamber();
+}
+
+// ---------- settings ----------
+// every = seconds between new things, many = most things in the air, r = size, g = gravity (slow = floaty),
+// speed = how fast the sword tip must move to slash (pixels per second), reach = extra sword width for hits,
+// friend = part of the things that are friends (Hedwig, Chocolate Frog), gold = part that are golden
+const LEVELS = {
+  easy: { name: 'Easy', every: 1.5, many: 3, r: 62, g: 330, speed: 300, reach: 46, friend: 0, gold: 0.12, penalty: 0, blade: 1.25 },
+  hard: { name: 'Hard', every: 0.75, many: 6, r: 44, g: 640, speed: 850, reach: 14, friend: 0.2, gold: 0.08, penalty: 1, blade: 1 },
+};
+const ROUND = +new URLSearchParams(location.search).get('t') || 35; // ?t=10 = 10 second round
+const FACES = { easy: KIDS.player1, hard: KIDS.player2 };           // Easy = player 1, Hard = player 2
+const COLORS = ['#ff6b5b', '#6fb4ff'];
+const GOLD = '#ffd84a', MAX_PARTS = 140, COMBO_MIN = 3;
+const settings = { players: 2, levels: ['easy', 'hard'] };
+
+const markLook = setupLookMenu(); // Camera Dim / Normal / Bright row in the menu (shared/look.js)
+function refreshMenu() {
+  document.querySelectorAll('[data-players]').forEach(b => b.classList.toggle('on', +b.dataset.players === settings.players));
+  document.querySelectorAll('[data-level]').forEach(b => b.classList.toggle('on', settings.levels[b.dataset.side] === b.dataset.level));
+  $('#lvl1').classList.toggle('hidden', settings.players === 1);
+  $('#lvl0name').textContent = settings.players === 1 ? 'Level' : 'Left player';
+}
+document.querySelectorAll('[data-players]').forEach(b => b.onclick = () => { settings.players = +b.dataset.players; refreshMenu(); });
+document.querySelectorAll('[data-level]').forEach(b => b.onclick = () => { settings.levels[b.dataset.side] = b.dataset.level; refreshMenu(); });
+refreshMenu();
+
+// ---------- sound ----------
+let ac, noise = null;
+function tone(type, f1, f2, dur, vol, delay = 0) {
+  const t = ac.currentTime + delay, o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.connect(g); g.connect(ac.destination);
+  o.frequency.setValueAtTime(f1, t); o.frequency.exponentialRampToValueAtTime(f2, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function whoosh(vol = 0.35, dur = 0.3, f1 = 500, f2 = 3000) { // sword swish: filtered noise that sweeps up
+  if (!noise) { // one second of noise, made once
+    noise = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+    const d = noise.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  }
+  const t = ac.currentTime, s = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
+  s.buffer = noise; f.type = 'bandpass'; f.Q.value = 1.2;
+  f.frequency.setValueAtTime(f1, t); f.frequency.exponentialRampToValueAtTime(f2, t + dur);
+  g.gain.setValueAtTime(0.001, t); g.gain.exponentialRampToValueAtTime(vol, t + dur * .3); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  s.connect(f); f.connect(g); g.connect(ac.destination); s.start(t); s.stop(t + dur + 0.02);
+}
+function sfx(kind, n = 0) {
+  if (!ac) return;
+  if (kind === 'swish') whoosh(0.18, 0.25, 700, 2600);
+  if (kind === 'slash') { whoosh(0.4, 0.22, 1200, 5000); tone('triangle', 1600 + n * 120, 500, 0.18, 0.18); tone('sine', 2093 + n * 150, 2093 + n * 150, 0.15, 0.12, 0.05); }
+  if (kind === 'gold') [988, 1319, 1568, 1976, 2637].forEach((f, i) => tone('sine', f, f, 0.25, 0.22, i * 0.06));
+  if (kind === 'sad') { tone('triangle', 660, 620, 0.25, 0.25); tone('triangle', 520, 400, 0.45, 0.25, 0.22); }
+  if (kind === 'combo') [784, 988, 1175, 1568, 1976].forEach((f, i) => { tone('square', f, f, 0.12, 0.07, i * 0.07); tone('sine', f, f, 0.3, 0.15, i * 0.07); });
+  if (kind === 'beep') tone('square', 600, 600, 0.12, 0.15);
+  if (kind === 'go') tone('square', 900, 900, 0.3, 0.15);
+  if (kind === 'end') // trumpet fanfare
+    [[523, 0, .15], [523, .18, .15], [523, .36, .15], [698, .54, .35], [880, .92, .2], [784, 1.12, .2], [1047, 1.32, .9]]
+      .forEach(([f, d, len]) => { tone('sawtooth', f, f, len, 0.12, d); tone('triangle', f, f, len, 0.25, d); });
+}
+
+// ---------- background music (made by code: a magic waltz in E minor, 3 beats per bar) ----------
+const MELODY = [76, 79, 83,  84, 83, 79,  81, 76, 72,  75, 78, 71,
+                83, 79, 76,  79, 84, 88,  84, 81, 76,  78, 75, 71];
+const ROOTS = [40, 36, 45, 47], STEP = 60 / 150;
+let musicOn = true, musicTimer = null, musicStep = 0, nextNote = 0, musicGain = null;
+const midi = m => 440 * 2 ** ((m - 69) / 12);
+function note(freq, t, dur, type, vol) {
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.frequency.value = freq; o.connect(g); g.connect(musicGain);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function playStep(i, t) {
+  const m = MELODY[i % 24], beat = i % 3, root = ROOTS[Math.floor(i / 3) % 4];
+  note(midi(m), t, 1.0, 'sine', 0.45); note(midi(m + 12), t, 0.35, 'sine', 0.15);
+  if (beat === 0) note(midi(root), t, STEP * 2.5, 'triangle', 0.6);
+  else note(midi(root + 12 + (beat === 1 ? 7 : 12)), t, STEP * 0.8, 'triangle', 0.25);
+}
+// Real music files from Iker (shared/music/, not in git). If a file can't play, the code waltz plays instead.
+const gameSong = new Audio('../../shared/music/game.mp3'), winnerSong = new Audio('../../shared/music/winner.mp3');
+gameSong.loop = true; gameSong.volume = 0.4; winnerSong.volume = 0.7;
+let winnerTimer = null;
+function startMusic() {
+  if (!musicOn) return;
+  stopWinnerSong();
+  gameSong.currentTime = 0;
+  gameSong.play().catch(startSynth);
+}
+function stopMusic() { gameSong.pause(); stopSynth(); }
+function playWinnerSong() {
+  if (!musicOn) return;
+  winnerTimer = setTimeout(() => { winnerSong.currentTime = 0; winnerSong.play().catch(() => {}); }, 2200);
+}
+function stopWinnerSong() { clearTimeout(winnerTimer); winnerSong.pause(); }
+function startSynth() {
+  if (!ac || !musicOn || musicTimer) return;
+  musicGain = ac.createGain(); musicGain.gain.value = 0.096; musicGain.connect(ac.destination);
+  musicStep = 0; nextNote = ac.currentTime + 0.05;
+  musicTimer = setInterval(() => {
+    while (nextNote < ac.currentTime + 0.12) { playStep(musicStep++, nextNote); nextNote += STEP; }
+  }, 25);
+}
+function stopSynth() {
+  if (!musicTimer) return;
+  clearInterval(musicTimer); musicTimer = null;
+  musicGain.gain.setTargetAtTime(0, ac.currentTime, 0.1);
+}
+
+// ---------- camera + body tracking ----------
+let poses = [];
+const status = t => $('#status').textContent = t;
+const sx = lm => (1 - lm.x) * W; // camera is mirrored
+
+// ---------- game state ----------
+let state = 'menu', timeLeft = 0, countdown = 0, zones = [], particles = [], texts = [], pieces = [];
+let mouse = null; // test sword: { x, y, t }
+
+function makeZones() {
+  zones = [];
+  for (let i = 0; i < settings.players; i++)
+    zones.push({ i, level: LEVELS[settings.levels[i]], face: FACES[settings.levels[i]], color: COLORS[i],
+      score: 0, slashed: 0, friendsHit: 0, bestCombo: 0, combos: 0, things: [], spawnT: 0.6 + i * 0.4, pop: 0, shake: 0,
+      sword: null, trail: [], swing: 0, swingQuiet: 0, swishT: 0, seenT: 9, hand: 16, wr: {} });
+}
+const zoneX = z => { const w = W / zones.length; return [z.i * w, (z.i + 1) * w]; };
+
+// ---------- the sword: read from her arms ----------
+// Both hands together = the grip is between the wrists, the blade points along her forearms (elbow -> wrist).
+// Hands apart = the faster hand holds it.
+function bodySword(z, p, dt) {
+  const ok = i => p[i] && (p[i].visibility ?? 1) > 0.35;
+  const P = i => ({ x: sx(p[i]), y: p[i].y * H });
+  if (!ok(15) && !ok(16)) return null;
+  const sw = ok(11) && ok(12) ? Math.hypot(P(11).x - P(12).x, P(11).y - P(12).y) : 120 * S;
+  const len = clamp(sw * 1.7, 150 * S, 330 * S) * z.level.blade;
+  // how fast each wrist moves (to pick the sword hand when hands are apart)
+  const sp = {};
+  for (const i of [15, 16]) {
+    if (!ok(i)) { sp[i] = -1; z.wr[i] = null; continue; }
+    const q = P(i), o = z.wr[i];
+    sp[i] = o ? Math.hypot(q.x - o.x, q.y - o.y) / Math.max(dt, 0.001) : 0;
+    z.wr[i] = q;
+  }
+  const arm = i => { // forearm direction for wrist i
+    const w = P(i), e = ok(i - 2) ? P(i - 2) : ok(i - 4) ? P(i - 4) : { x: w.x, y: w.y + 1 };
+    return { x: w.x - e.x, y: w.y - e.y };
+  };
+  let grip, dir;
+  const both = ok(15) && ok(16);
+  if (both && Math.hypot(P(15).x - P(16).x, P(15).y - P(16).y) < Math.max(0.9 * sw, 90 * S)) {
+    const a = P(15), b = P(16), da = arm(15), db = arm(16), na = Math.hypot(da.x, da.y) || 1, nb = Math.hypot(db.x, db.y) || 1;
+    grip = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    dir = { x: da.x / na + db.x / nb, y: da.y / na + db.y / nb };
+  } else {
+    if (!ok(z.hand) || (both && sp[z.hand === 15 ? 16 : 15] > sp[z.hand] * 1.4 + 60 * S)) z.hand = ok(16) ? (both && sp[15] > sp[16] ? 15 : 16) : 15;
+    grip = P(z.hand); dir = arm(z.hand);
+  }
+  return { grip, dir, len };
+}
+function mouseSword(z) {
+  const vx = mouse.vx || 0;
+  return { grip: { x: mouse.x, y: mouse.y }, dir: { x: clamp(vx / 1800, -1.2, 1.2), y: -1 }, len: 170 * S * z.level.blade };
+}
+
+function readSwords(dt) {
+  // each body goes to the half where its nose is (the biggest body wins)
+  const found = zones.map(() => null);
+  for (const p of poses) {
+    if (!p[0] || !p[11] || !p[12]) continue;
+    const zi = zones.length === 1 ? 0 : (sx(p[0]) < W / 2 ? 0 : 1), width = Math.abs(p[11].x - p[12].x);
+    if (!found[zi] || width > found[zi].width) found[zi] = { p, width };
+  }
+  const now = performance.now();
+  const mouseOn = mouse && now - mouse.t < 1500;
+  const mz = !mouseOn ? -1 : zones.length === 1 ? 0 : (mouse.x < W / 2 ? 0 : 1);
+  zones.forEach((z, i) => {
+    let s = null;
+    if (i === mz) s = mouseSword(z);
+    else if (found[i]) s = bodySword(z, found[i].p, dt);
+    if (!s) { z.seenT += dt; if (z.seenT > 0.4) { z.sword = null; z.trail = []; } return; }
+    z.seenT = 0;
+    // smooth a little (less shaking), but not too much (or fast swings get lost)
+    const n = Math.hypot(s.dir.x, s.dir.y) || 1; let dx = s.dir.x / n, dy = s.dir.y / n;
+    const o = z.sword;
+    let gx = s.grip.x, gy = s.grip.y;
+    if (o) {
+      const k = i === mz ? 1 : 0.7;
+      gx = o.gx + (gx - o.gx) * k; gy = o.gy + (gy - o.gy) * k;
+      dx = o.dx + (dx - o.dx) * 0.6; dy = o.dy + (dy - o.dy) * 0.6;
+      const m = Math.hypot(dx, dy) || 1; dx /= m; dy /= m;
+    }
+    const tx = gx + dx * s.len, ty = gy + dy * s.len;
+    const speed = o ? Math.hypot(tx - o.tx, ty - o.ty) / Math.max(dt, 0.001) : 0;
+    z.sword = { gx, gy, dx, dy, tx, ty, len: s.len, speed, ptx: o ? o.tx : tx, pty: o ? o.ty : ty, pgx: o ? o.gx : gx, pgy: o ? o.gy : gy };
+    z.trail.push({ gx, gy, tx, ty, t: now, fast: speed > z.level.speed * S });
+    if (z.trail.length > 8) z.trail.shift();
+  });
+}
+
+// ---------- the flying things ----------
+const CURSED = ['locket', 'cup', 'diary', 'tiara', 'wisp', 'wisp'];
+function spawn(z) {
+  const L = z.level, [x0, x1] = zoneX(z), roll = Math.random();
+  const kind = roll < L.friend ? (Math.random() < .5 ? 'owl' : 'frog') : roll < L.friend + L.gold ? 'gold' : CURSED[Math.floor(rand(0, CURSED.length))];
+  const r = L.r * S * (kind === 'gold' ? 1.1 : 1), w = x1 - x0;
+  const x = rand(x0 + w * .15, x1 - w * .15), tx = rand(x0 + w * .3, x1 - w * .3);
+  const g = L.g * S, top = rand(.22, .5) * H, vy = -Math.sqrt(2 * g * (H + r - top)), flight = -2 * vy / g;
+  z.things.push({ kind, x, y: H + r, r, vx: (tx - x) / flight * 1.6, vy, g, rot: rand(-.5, .5), vr: rand(-1.5, 1.5), friend: kind === 'owl' || kind === 'frog', t: 0 });
+}
+
+function burst(x, y, col, n, sp = 1) {
+  n = Math.min(n, MAX_PARTS - particles.length);
+  for (let k = 0; k < n; k++) {
+    const a = rand(0, 6.28), v = rand(120, 380) * S * sp;
+    particles.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 100 * S, life: rand(.4, .7), col, r: rand(2.5, 6) });
+  }
+}
+
+function slash(z, b, sw) {
+  b.dead = true;
+  const mx = sw.tx - sw.ptx, my = sw.ty - sw.pty, cut = Math.atan2(my, mx);
+  if (b.friend) { // a friend! it is NOT cut: it tumbles away, a sad sound
+    sfx('sad');
+    const pen = z.level.penalty; z.score = Math.max(0, z.score - pen); z.friendsHit++;
+    if (pen) z.shake = 0.35;
+    pieces.push({ img: SPRITES[b.kind], x: b.x, y: b.y, r: b.r, vx: (mx > 0 ? 1 : -1) * 300 * S, vy: -500 * S, rot: b.rot, vr: (mx > 0 ? 6 : -6), cut: 0, side: 0, life: 1.2 });
+    texts.push({ x: b.x, y: b.y - b.r, t: pen ? '-1' : 'Oops!', sub: b.kind === 'owl' ? 'Not Hedwig! 🦉' : 'Not the Chocolate Frog! 🐸', life: 1.1, col: '#ffb3b3' });
+    return;
+  }
+  const pts = b.kind === 'gold' ? 3 : 1;
+  z.score += pts; z.slashed++; z.swing++; z.pop = 1;
+  sfx(b.kind === 'gold' ? 'gold' : 'slash', Math.min(z.swing, 6));
+  // two halves fly apart (sideways to the cut)
+  const nx = -Math.sin(cut), ny = Math.cos(cut), push = 160 * S;
+  for (const side of [-1, 1])
+    pieces.push({ img: SPRITES[b.kind], x: b.x, y: b.y, r: b.r, vx: b.vx * .4 + nx * push * side + mx * 2, vy: Math.min(b.vy, 0) * .3 + ny * push * side - 150 * S,
+      rot: b.rot, vr: side * rand(2, 4), cut: cut - b.rot, side, life: 1.1 });
+  burst(b.x, b.y, b.kind === 'gold' ? GOLD : Math.random() < .5 ? '#c7f7d4' : '#fff1b0', b.kind === 'gold' ? 16 : 10);
+  burst(b.x, b.y, '#b58cff', 4, .6); // a puff of the dark magic leaving
+  texts.push({ x: b.x, y: b.y - b.r * .6, t: '+' + pts, life: .8, col: b.kind === 'gold' ? GOLD : '#fff' });
+}
+
+function endSwing(z) {
+  if (z.swing >= COMBO_MIN) {
+    const bonus = z.swing; z.score += bonus; z.combos++; z.bestCombo = Math.max(z.bestCombo, z.swing);
+    const [x0, x1] = zoneX(z);
+    texts.push({ x: (x0 + x1) / 2, y: H * .4, t: `COMBO x${z.swing}!`, sub: `+${bonus} bonus ⚔️`, life: 1.6, col: GOLD, big: 1 });
+    sfx('combo');
+  }
+  z.swing = 0;
+}
+
+// distance from point (px,py) to the line piece a-b
+function segDist(px, py, ax, ay, bx, by) {
+  const vx = bx - ax, vy = by - ay, l = vx * vx + vy * vy, t = l ? clamp(((px - ax) * vx + (py - ay) * vy) / l, 0, 1) : 0;
+  return Math.hypot(px - ax - vx * t, py - ay - vy * t);
+}
+
+function startGame() {
+  if (!ac) ac = new AudioContext();
+  ac.resume();
+  recStart(canvas, ac, [gameSong, winnerSong]); // record this round (see shared/recorder.js)
+  stopMusic(); startMusic();
+  makeZones(); particles = []; texts = []; pieces = [];
+  $('#menu').classList.add('hidden'); $('#end').classList.add('hidden');
+  state = 'count'; countdown = 3.99; lastBeep = 4;
+}
+let lastBeep = 4;
+
+function endGame() {
+  recStop();
+  zones.forEach(endSwing);
+  state = 'end'; stopMusic(); sfx('end'); playWinnerSong();
+  const best = Math.max(...zones.map(z => z.score)), winners = zones.filter(z => z.score === best);
+  $('#endTitle').textContent = zones.length === 1 ? `${zones[0].face.name}, a True Gryffindor!`
+    : winners.length === 2 ? 'A tie! Two champions!' : `${winners[0].face.name} wins the House Cup!`;
+  $('#trophy').innerHTML = winners.map(z => `<div class="cup">${CUP}<div class="cupface">${kidImg(z.face, '#fff6c8')}</div></div>`).join('');
+  $('#result').innerHTML = zones.map(z =>
+    `<span style="color:${z.color}">${kidImg(z.face, z.color)} ${z.face.name} (${z.level.name}): <b>${z.score}</b> point${z.score === 1 ? '' : 's'}` +
+    ` · ${z.slashed} slashed${z.bestCombo ? ` · best combo x${z.bestCombo}` : ''}</span>`).join('<br>');
+  $('#end').classList.remove('hidden');
+}
+const CUP = `<svg viewBox="0 0 200 240"><defs><linearGradient id="gold" x1="0" x2="1">
+  <stop offset="0" stop-color="#8a5a00"/><stop offset=".35" stop-color="#fff1b0"/><stop offset=".6" stop-color="#f5c542"/>
+  <stop offset="1" stop-color="#8a5a00"/></linearGradient></defs>
+  <path d="M48 35 C5 35 5 105 62 112" fill="none" stroke="url(#gold)" stroke-width="12"/>
+  <path d="M152 35 C195 35 195 105 138 112" fill="none" stroke="url(#gold)" stroke-width="12"/>
+  <path d="M38 20 H162 C162 105 132 135 100 140 C68 135 38 105 38 20Z" fill="url(#gold)"/>
+  <rect x="90" y="138" width="20" height="38" fill="url(#gold)"/>
+  <path d="M62 176 H138 L150 202 H50Z" fill="url(#gold)"/>
+  <rect x="36" y="202" width="128" height="30" rx="5" fill="#7f0909" stroke="#f5c542" stroke-width="3"/>
+  <text x="100" y="223" text-anchor="middle" font-family="Cinzel, Georgia, serif" font-weight="800" font-size="17"
+    fill="#f7e7b0">⚡ CHAMPION ⚡</text></svg>`;
+function toMenu() {
+  recCancel();
+  state = 'menu'; zones = []; texts = []; particles = []; pieces = []; stopMusic(); stopWinnerSong();
+  $('#end').classList.add('hidden'); $('#menu').classList.remove('hidden');
+}
+
+$('#start').onclick = startGame;
+document.querySelector('.again').onclick = startGame;
+$('#toMenu').onclick = toMenu;
+addEventListener('keydown', e => {
+  if (e.repeat) return;
+  if (e.code === 'Space' && state !== 'play' && state !== 'count') startGame();
+  if (e.code === 'Escape') toMenu();
+  if (e.code === 'KeyH') location.href = '../../';
+  if (e.code === 'KeyC') { const l = nextLook(); markLook && markLook(); status('📷 Camera: ' + l.name); setTimeout(() => status(''), 1500); }
+  if (e.code === 'KeyM') { musicOn = !musicOn; if (musicOn && (state === 'play' || state === 'count')) startMusic(); else { stopMusic(); stopWinnerSong(); } }
+  if (e.code === 'KeyF') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+});
+addEventListener('mousemove', e => {
+  const now = performance.now(), o = mouse, dt = o ? Math.max(1, now - o.t) / 1000 : 1;
+  const vx = o && dt < .2 ? (e.clientX - o.x) / dt : 0;
+  mouse = { x: e.clientX, y: e.clientY, t: now, vx: o ? o.vx * .5 + vx * .5 : 0 };
+});
+document.addEventListener('mouseleave', () => mouse = null);
+
+// ---------- update ----------
+function update(dt) {
+  if (state === 'count') {
+    countdown -= dt;
+    const n = Math.ceil(countdown);
+    if (n < lastBeep) { lastBeep = n; sfx(n > 0 ? 'beep' : 'go'); }
+    if (countdown <= 0) { state = 'play'; timeLeft = ROUND; }
+  } else if (state === 'play') {
+    timeLeft -= dt;
+    if (timeLeft <= 0) { timeLeft = 0; endGame(); }
+  }
+  if (zones.length) readSwords(dt);
+
+  for (const z of zones) {
+    const L = z.level, sw = z.sword;
+    z.pop = Math.max(0, z.pop - dt * 2.5); z.shake = Math.max(0, z.shake - dt); z.swishT -= dt;
+    if (state === 'play') {
+      z.spawnT -= dt;
+      if (z.spawnT <= 0 && z.things.length < L.many) {
+        spawn(z); if (L.friend && Math.random() < .3 && z.things.length < L.many) spawn(z); // Hard: sometimes two at once
+        z.spawnT = L.every * rand(0.7, 1.3);
+      }
+    }
+    for (const b of z.things) { b.t += dt; b.x += b.vx * dt; b.y += b.vy * dt; b.vy += b.g * dt; b.rot += b.vr * dt; }
+    // slashing: the sword must move fast, and the blade (or the path of its tip) must cross the thing
+    const fast = sw && sw.speed > L.speed * S;
+    if (fast) {
+      z.swingQuiet = 0;
+      if (z.swishT <= 0) { sfx('swish'); z.swishT = 0.35; }
+      if (state === 'play') {
+        const reach = L.reach * S;
+        for (const b of z.things) {
+          if (b.dead || b.y > H + b.r * .3) continue;
+          const d = Math.min(segDist(b.x, b.y, sw.gx, sw.gy, sw.tx, sw.ty), segDist(b.x, b.y, sw.ptx, sw.pty, sw.tx, sw.ty),
+            segDist(b.x, b.y, (sw.pgx + sw.ptx) / 2, (sw.pgy + sw.pty) / 2, (sw.gx + sw.tx) / 2, (sw.gy + sw.ty) / 2));
+          if (d < b.r * .85 + reach) slash(z, b, sw);
+        }
+      }
+    } else if ((z.swingQuiet += dt) > 0.2 && z.swing) endSwing(z);
+    z.things = z.things.filter(b => !b.dead && !(b.vy > 0 && b.y > H + b.r * 1.5));
+  }
+  for (const p of pieces) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 900 * S * dt; p.rot += p.vr * dt; p.life -= dt; }
+  pieces = pieces.filter(p => p.life > 0 && p.y < H + p.r * 2);
+
+  if (state === 'end' && Math.random() < 0.5 && particles.length < MAX_PARTS) // golden confetti for the champion
+    particles.push({ x: rand(0, W), y: -10, vx: rand(-40, 40) * S, vy: rand(50, 150) * S, life: 3,
+      col: ['#f7c843', '#fff1b0', '#ff6b5b', '#6fb4ff', '#ffffff'][Math.floor(rand(0, 5))], r: rand(3, 7), g: 20 });
+  for (const p of particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += (p.g ?? 500) * S * dt; p.life -= dt; }
+  particles = particles.filter(p => p.life > 0);
+  for (const t of texts) { t.y -= (t.big ? 15 : 60) * S * dt; t.life -= dt; }
+  texts = texts.filter(t => t.life > 0);
+}
+
+// ---------- pictures of the things (painted once into small hidden canvases) ----------
+const SP = 160, SR = 56; // sprite size, and the thing's radius inside it (room for the glow around)
+function sprite(paint) {
+  const c = document.createElement('canvas'); c.width = c.height = SP;
+  const g = c.getContext('2d'); g.translate(SP / 2, SP / 2); g.lineJoin = g.lineCap = 'round';
+  paint(g, SR); return c;
+}
+function halo(g, r, col) { // soft light behind a thing
+  const h = g.createRadialGradient(0, 0, r * .3, 0, 0, r * 1.4);
+  h.addColorStop(0, col); h.addColorStop(1, col.replace(/[\d.]+\)$/, '0)'));
+  g.fillStyle = h; g.fillRect(-SP / 2, -SP / 2, SP, SP);
+}
+function eyes(g, x, y, s, col = '#fff') { // two little cute eyes (the cursed things look grumpy-cute, not scary)
+  for (const ex of [-1, 1]) {
+    g.fillStyle = col; g.beginPath(); g.ellipse(x + ex * s * 1.3, y, s, s * 1.15, 0, 0, 7); g.fill();
+    g.fillStyle = '#1a0f22'; g.beginPath(); g.arc(x + ex * s * 1.3 + s * .2, y + s * .2, s * .55, 0, 7); g.fill();
+    g.fillStyle = '#fff'; g.beginPath(); g.arc(x + ex * s * 1.3 + s * .38, y - s * .05, s * .22, 0, 7); g.fill();
+  }
+}
+const SPRITES = {
+  locket: sprite((g, r) => { // Slytherin locket: dark green oval with a gold rim and a silver S
+    halo(g, r, 'rgba(120,255,160,.35)');
+    g.strokeStyle = '#c9a646'; g.lineWidth = 4; g.beginPath(); g.arc(0, -r * .95, r * .22, Math.PI, 0); g.stroke(); // chain loop
+    g.fillStyle = '#c9a646'; g.beginPath(); g.ellipse(0, 0, r * .8, r * .92, 0, 0, 7); g.fill();
+    g.fillStyle = '#1f5a3a'; g.beginPath(); g.ellipse(0, 0, r * .66, r * .78, 0, 0, 7); g.fill();
+    g.strokeStyle = '#d8e6dc'; g.lineWidth = 7;
+    g.beginPath(); g.moveTo(r * .3, -r * .45); g.bezierCurveTo(-r * .45, -r * .55, -r * .45, -r * .02, 0, 0);
+    g.bezierCurveTo(r * .45, r * .02, r * .45, r * .55, -r * .3, r * .45); g.stroke();
+    eyes(g, 0, -r * .1, r * .1);
+  }),
+  cup: sprite((g, r) => { // Hufflepuff's cup, a little cracked
+    halo(g, r, 'rgba(255,220,120,.3)');
+    g.strokeStyle = '#b08a2e'; g.lineWidth = 8;
+    for (const s of [-1, 1]) { g.beginPath(); g.arc(s * r * .72, -r * .2, r * .25, -Math.PI / 2, Math.PI / 2, s < 0); g.stroke(); }
+    g.fillStyle = '#c9a03a'; g.beginPath(); g.moveTo(-r * .72, -r * .65); g.lineTo(r * .72, -r * .65);
+    g.quadraticCurveTo(r * .65, r * .3, 0, r * .4); g.quadraticCurveTo(-r * .65, r * .3, -r * .72, -r * .65); g.fill();
+    g.fillRect(-r * .12, r * .35, r * .24, r * .3); g.fillRect(-r * .45, r * .62, r * .9, r * .18);
+    g.fillStyle = '#8a6a1e'; g.fillRect(-r * .72, -r * .7, r * 1.44, r * .1);
+    g.strokeStyle = '#4a3410'; g.lineWidth = 3; g.beginPath(); g.moveTo(r * .2, -r * .6); g.lineTo(r * .05, -r * .35); g.lineTo(r * .25, -r * .2); g.lineTo(r * .1, r * .05); g.stroke(); // crack
+    eyes(g, -r * .1, -r * .25, r * .1);
+  }),
+  diary: sprite((g, r) => { // Tom Riddle's diary: a small black book
+    halo(g, r, 'rgba(180,140,255,.3)');
+    g.rotate(-.15);
+    g.fillStyle = '#efe4c8'; g.fillRect(-r * .6, -r * .78, r * 1.25, r * 1.56); // pages
+    g.fillStyle = '#26202c'; g.fillRect(-r * .68, -r * .82, r * 1.25, r * 1.6);
+    g.fillStyle = '#3a3242'; g.fillRect(-r * .68, -r * .82, r * .18, r * 1.6);
+    g.strokeStyle = '#c9a646'; g.lineWidth = 3; g.strokeRect(-r * .42, -r * .6, r * .88, r * .28);
+    eyes(g, 0, r * .15, r * .12, '#efe4c8');
+  }),
+  tiara: sprite((g, r) => { // Ravenclaw's diadem: a silver crown band with a big blue gem
+    halo(g, r, 'rgba(140,190,255,.35)');
+    g.fillStyle = '#dfe4ec'; g.strokeStyle = '#7d8799'; g.lineWidth = 3;
+    g.beginPath(); g.moveTo(-r * .85, r * .05);
+    for (const [x, y] of [[-.6, -.3], [-.4, -.02], [-.2, -.5], [0, -.08], [.2, -.5], [.4, -.02], [.6, -.3], [.85, .05]]) g.lineTo(x * r, y * r - (x === 0 ? r * .55 : 0));
+    g.quadraticCurveTo(0, r * .45, -r * .85, r * .05); g.closePath(); g.fill(); g.stroke();
+    g.fillStyle = '#3d7bff'; g.beginPath(); g.ellipse(0, -r * .28, r * .14, r * .2, 0, 0, 7); g.fill();
+    g.fillStyle = '#bfe0ff'; g.beginPath(); g.arc(-r * .04, -r * .34, r * .05, 0, 7); g.fill();
+    g.fillStyle = '#9fd0ff'; for (const x of [-.55, .55]) { g.beginPath(); g.arc(x * r, -r * .08, r * .07, 0, 7); g.fill(); }
+    eyes(g, 0, r * .12, r * .09);
+  }),
+  wisp: sprite((g, r) => { // a little puff of dark smoke with sleepy eyes
+    halo(g, r, 'rgba(170,110,255,.35)');
+    g.fillStyle = 'rgba(60,40,90,.92)';
+    for (const [x, y, s] of [[0, 0, .62], [-.42, .15, .42], [.42, .12, .45], [-.2, -.38, .4], [.25, -.35, .38], [0, .4, .4]]) {
+      g.beginPath(); g.arc(x * r, y * r, s * r, 0, 7); g.fill();
+    }
+    g.fillStyle = 'rgba(140,100,200,.6)'; g.beginPath(); g.arc(-r * .2, -r * .3, r * .2, 0, 7); g.fill();
+    eyes(g, 0, -r * .02, r * .12, '#d6f5ff');
+  }),
+  gold: sprite((g, r) => { // golden locket, shining: +3
+    halo(g, r, 'rgba(255,220,80,.7)');
+    g.shadowColor = '#ffd700'; g.shadowBlur = 18; // fine here: painted once, not every frame
+    g.fillStyle = '#ffe27a'; g.beginPath(); g.ellipse(0, 0, r * .8, r * .92, 0, 0, 7); g.fill(); g.shadowBlur = 0;
+    g.fillStyle = '#f5b800'; g.beginPath(); g.ellipse(0, 0, r * .62, r * .74, 0, 0, 7); g.fill();
+    g.fillStyle = '#fff6c8'; g.beginPath(); g.ellipse(-r * .2, -r * .3, r * .16, r * .24, -.4, 0, 7); g.fill();
+    g.fillStyle = '#7a4a00'; g.font = `900 ${r * .7}px Georgia, serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText('3', 0, r * .1);
+  }),
+  owl: sprite((g, r) => { // Hedwig: a round snowy owl, wings open
+    halo(g, r, 'rgba(255,255,255,.35)');
+    g.fillStyle = '#f4f4f0';
+    for (const s of [-1, 1]) { g.beginPath(); g.ellipse(s * r * .62, 0, r * .35, r * .6, s * .5, 0, 7); g.fill(); }
+    g.beginPath(); g.ellipse(0, r * .05, r * .6, r * .78, 0, 0, 7); g.fill();
+    g.fillStyle = '#2a2a2a'; for (const [x, y] of [[-.25, .3], [.2, .45], [-.05, .6], [.3, .15]]) g.fillRect(x * r, y * r, r * .1, r * .05);
+    for (const s of [-1, 1]) {
+      g.fillStyle = '#ffcf3a'; g.beginPath(); g.arc(s * r * .22, -r * .25, r * .17, 0, 7); g.fill();
+      g.fillStyle = '#111'; g.beginPath(); g.arc(s * r * .22, -r * .25, r * .08, 0, 7); g.fill();
+    }
+    g.fillStyle = '#3a3a3a'; g.beginPath(); g.moveTo(-r * .07, -r * .1); g.lineTo(r * .07, -r * .1); g.lineTo(0, r * .05); g.fill();
+    g.fillStyle = '#ff9ec0'; g.font = `${r * .35}px Georgia`; g.textAlign = 'center'; g.fillText('♥', 0, -r * .78);
+  }),
+  frog: sprite((g, r) => { // a Chocolate Frog: brown, happy
+    halo(g, r, 'rgba(255,200,140,.35)');
+    g.fillStyle = '#6b3e1e';
+    for (const s of [-1, 1]) { g.beginPath(); g.ellipse(s * r * .6, r * .45, r * .32, r * .16, s * .3, 0, 7); g.fill(); }
+    g.fillStyle = '#7d4a24'; g.beginPath(); g.ellipse(0, r * .1, r * .72, r * .52, 0, 0, 7); g.fill();
+    for (const s of [-1, 1]) { g.beginPath(); g.arc(s * r * .35, -r * .35, r * .22, 0, 7); g.fill(); }
+    for (const s of [-1, 1]) {
+      g.fillStyle = '#fff'; g.beginPath(); g.arc(s * r * .35, -r * .37, r * .14, 0, 7); g.fill();
+      g.fillStyle = '#111'; g.beginPath(); g.arc(s * r * .35, -r * .35, r * .07, 0, 7); g.fill();
+    }
+    g.strokeStyle = '#3a1f0c'; g.lineWidth = 4; g.beginPath(); g.arc(0, 0, r * .35, .3, Math.PI - .3); g.stroke();
+    g.fillStyle = '#a8703c'; g.beginPath(); g.ellipse(-r * .3, r * .05, r * .14, r * .08, -.4, 0, 7); g.fill(); // shine
+  }),
+};
+
+// ---------- the Chamber of Secrets door (painted once into a hidden canvas) ----------
+let seed = 1;
+const srand = (a, b) => { seed = (seed * 16807) % 2147483647; return a + (seed / 2147483647) * (b - a); };
+const TORCHES = [[.1, .38], [.9, .38], [.33, .2], [.67, .2]]; // x, y (parts of the screen)
+function snake(c, x, top, bottom, amp, col) { // a carved snake curling down a pillar
+  c.strokeStyle = col; c.lineWidth = 9 * S; c.beginPath();
+  for (let y = top; y <= bottom; y += 6 * S) { const k = (y - top) / 50 / S; c.lineTo(x + Math.sin(k) * amp, y); }
+  c.stroke();
+  c.fillStyle = col; c.beginPath(); c.ellipse(x, top - 8 * S, 13 * S, 10 * S, 0, 0, 7); c.fill(); // head
+  c.fillStyle = '#7dffb0'; for (const s of [-1, 1]) { c.beginPath(); c.arc(x + s * 5 * S, top - 10 * S, 2.5 * S, 0, 7); c.fill(); } // emerald eyes
+}
+function pillar(c, x, w, h) {
+  const g = c.createLinearGradient(x - w / 2, 0, x + w / 2, 0);
+  g.addColorStop(0, 'rgba(30,44,38,.95)'); g.addColorStop(.45, 'rgba(78,96,86,.95)'); g.addColorStop(1, 'rgba(24,34,30,.95)');
+  c.fillStyle = g; c.fillRect(x - w / 2, H - h, w, h);
+  c.fillStyle = 'rgba(90,110,100,.95)'; c.fillRect(x - w * .62, H - h - 18 * S, w * 1.24, 22 * S); c.fillRect(x - w * .62, H - 30 * S, w * 1.24, 30 * S);
+  c.strokeStyle = 'rgba(0,0,0,.25)'; c.lineWidth = 2 * S;
+  for (let y = H - h + 40 * S; y < H; y += 70 * S) { c.beginPath(); c.moveTo(x - w / 2, y); c.lineTo(x + w / 2, y); c.stroke(); }
+  snake(c, x, H - h + 45 * S, H - 45 * S, w * .22, 'rgba(40,70,52,.95)');
+}
+function paintChamber() {
+  const c = bgx; seed = 23;
+  c.clearRect(0, 0, W, H);
+  // stone vault: darker at the top, see-through in the middle so the camera shows the kids
+  const g0 = c.createLinearGradient(0, 0, 0, H);
+  g0.addColorStop(0, 'rgba(10,24,18,.95)'); g0.addColorStop(.28, 'rgba(16,36,28,.6)');
+  g0.addColorStop(.6, 'rgba(14,30,24,.3)'); g0.addColorStop(1, 'rgba(10,22,16,.6)');
+  c.fillStyle = g0; c.fillRect(0, 0, W, H);
+  // stone blocks at the top
+  c.strokeStyle = 'rgba(120,160,140,.12)'; c.lineWidth = 2 * S;
+  for (let y = 0, row = 0; y < H * .22; y += 36 * S, row++)
+    for (let x = (row % 2) * 40 * S; x < W; x += 80 * S) c.strokeRect(x, y, 80 * S, 36 * S);
+  // the round Chamber door at the top middle: a big circle with seven snakes (only the top part shows)
+  const dx = W / 2, dy = -40 * S, dr = 190 * S;
+  c.fillStyle = 'rgba(52,72,62,.9)'; c.beginPath(); c.arc(dx, dy, dr, 0, 7); c.fill();
+  c.strokeStyle = 'rgba(150,190,165,.6)'; c.lineWidth = 6 * S; c.stroke();
+  c.strokeStyle = 'rgba(28,48,38,.9)'; c.lineWidth = 8 * S;
+  for (let k = 0; k < 7; k++) { // snakes, like spokes of a wheel
+    const a = k / 7 * Math.PI + .2;
+    c.beginPath();
+    for (let t = 0; t <= 1; t += .1) { const rr = dr * (.25 + .7 * t), aa = a + Math.sin(t * 9) * .08; c.lineTo(dx + Math.cos(aa) * rr, dy + Math.sin(aa) * rr); }
+    c.stroke();
+  }
+  c.fillStyle = '#5effa0'; c.beginPath(); c.arc(dx, dy + dr * .2, 9 * S, 0, 7); c.fill(); // emerald in the middle
+  // tall stone pillars with snake carvings at the sides (the middle stays open to see the kids)
+  const pw = 0.06 * W;
+  for (const fx of [.03, .97]) pillar(c, fx * W, pw, H);
+  for (const fx of [.18, .82]) pillar(c, fx * W, pw * .65, H * .75);
+  // torches on the wall (the moving flames are drawn each frame)
+  for (const [fx, fy] of TORCHES) {
+    const x = fx * W, y = fy * H;
+    c.fillStyle = 'rgba(60,40,24,.95)'; c.fillRect(x - 5 * S, y, 10 * S, 40 * S);
+    c.fillStyle = 'rgba(110,90,60,.95)'; c.fillRect(x - 12 * S, y - 4 * S, 24 * S, 10 * S);
+  }
+  // wet stone floor with a green shine
+  const g1 = c.createLinearGradient(0, H * .88, 0, H);
+  g1.addColorStop(0, 'rgba(20,50,36,0)'); g1.addColorStop(1, 'rgba(40,110,70,.45)');
+  c.fillStyle = g1; c.fillRect(0, H * .88, W, H * .12);
+  c.fillStyle = 'rgba(160,255,200,.1)';
+  for (let k = 0; k < 20; k++) { c.beginPath(); c.ellipse(srand(0, W), srand(H * .93, H), srand(20, 60) * S, srand(2, 5) * S, 0, 0, 7); c.fill(); }
+}
+
+// glow pictures, made once (cheap to draw, no shadow blur)
+function makeGlow(size, stops) {
+  const c = document.createElement('canvas'); c.width = c.height = size;
+  const g = c.getContext('2d'), r = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  stops.forEach(([o, col]) => r.addColorStop(o, col)); g.fillStyle = r; g.fillRect(0, 0, size, size);
+  return c;
+}
+const torchGlow = makeGlow(128, [[0, 'rgba(160,255,190,.75)'], [.3, 'rgba(60,220,120,.3)'], [1, 'rgba(40,200,100,0)']]);
+const swordGlow = makeGlow(64, [[0, 'rgba(230,245,255,.9)'], [.35, 'rgba(190,220,255,.35)'], [1, 'rgba(160,200,255,0)']]);
+
+function drawTorches(t) {
+  ctx.globalCompositeOperation = 'lighter';
+  TORCHES.forEach(([fx, fy], i) => {
+    const x = fx * W, y = fy * H, fl = 1 + .12 * Math.sin(t * 9 + i * 2) + .06 * Math.sin(t * 23 + i), r = 110 * S * fl;
+    ctx.globalAlpha = .8; ctx.drawImage(torchGlow, x - r, y - 10 * S - r, r * 2, r * 2);
+    ctx.globalAlpha = 1; ctx.fillStyle = '#8dffb4';
+    ctx.beginPath(); ctx.ellipse(x, y - 14 * S, 8 * S, 18 * S * fl, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = '#eafff0'; ctx.beginPath(); ctx.ellipse(x, y - 9 * S, 4 * S, 9 * S * fl, 0, 0, 7); ctx.fill();
+  });
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+function drawThing(b) {
+  const s = b.r / SR * SP;
+  ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(b.rot);
+  ctx.drawImage(SPRITES[b.kind], -s / 2, -s / 2, s, s); ctx.restore();
+}
+function drawPiece(p) {
+  const s = p.r / SR * SP;
+  ctx.save(); ctx.globalAlpha = Math.min(1, p.life / .4); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+  if (p.side) { ctx.rotate(p.cut); ctx.beginPath(); ctx.rect(-s / 2, p.side > 0 ? 0 : -s / 2, s, s / 2); ctx.clip(); ctx.rotate(-p.cut); }
+  ctx.drawImage(p.img, -s / 2, -s / 2, s, s); ctx.restore();
+}
+
+// the Sword of Gryffindor: silver blade, gold guard, rubies in the hilt; a bright slash trail when fast
+function drawSword(z, now) {
+  const w = z.sword; if (!w) return;
+  const L = z.level, fast = w.speed > L.speed * S;
+  // slash trail: the band the blade swept in the last moments (added light, no blur)
+  const tr = z.trail;
+  if (tr.length > 1) {
+    ctx.globalCompositeOperation = 'lighter';
+    for (let k = 1; k < tr.length; k++) {
+      const a = tr[k - 1], b = tr[k], age = (now - b.t) / 1000;
+      if (!b.fast || age > .25) continue;
+      const al = (1 - age / .25) * (k / tr.length);
+      const m = .45; // from the middle of the blade to the tip
+      ctx.globalAlpha = al * .7; ctx.fillStyle = k === tr.length - 1 ? '#ffffff' : '#cfe6ff';
+      ctx.beginPath();
+      ctx.moveTo(a.gx + (a.tx - a.gx) * m, a.gy + (a.ty - a.gy) * m); ctx.lineTo(a.tx, a.ty);
+      ctx.lineTo(b.tx, b.ty); ctx.lineTo(b.gx + (b.tx - b.gx) * m, b.gy + (b.ty - b.gy) * m); ctx.closePath(); ctx.fill();
+    }
+    ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+  }
+  const len = w.len, bw = 13 * S * L.blade; // blade width at the guard
+  ctx.save(); ctx.translate(w.gx, w.gy); ctx.rotate(Math.atan2(w.dy, w.dx)); // +x = toward the tip
+  // soft glow: wide see-through strokes
+  ctx.lineCap = 'round';
+  ctx.globalAlpha = fast ? .45 : .25; ctx.strokeStyle = fast ? '#ffffff' : '#bcd7ff'; ctx.lineWidth = bw * (fast ? 4 : 3);
+  ctx.beginPath(); ctx.moveTo(len * .12, 0); ctx.lineTo(len * .97, 0); ctx.stroke();
+  if (L.reach > 30) { ctx.globalAlpha = .12; ctx.lineWidth = L.reach * S * 2; ctx.stroke(); } // Easy: the wide magic edge that also cuts
+  ctx.globalAlpha = 1;
+  // blade
+  const g = ctx.createLinearGradient(0, -bw, 0, bw);
+  g.addColorStop(0, '#9aa6b8'); g.addColorStop(.45, '#ffffff'); g.addColorStop(.55, '#dfe8f5'); g.addColorStop(1, '#7c879a');
+  ctx.fillStyle = g; ctx.beginPath();
+  ctx.moveTo(len * .1, -bw / 2); ctx.lineTo(len * .88, -bw * .4); ctx.lineTo(len, 0); ctx.lineTo(len * .88, bw * .4); ctx.lineTo(len * .1, bw / 2); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = 'rgba(80,90,110,.6)'; ctx.lineWidth = 1.5 * S; ctx.beginPath(); ctx.moveTo(len * .14, 0); ctx.lineTo(len * .85, 0); ctx.stroke(); // middle ridge
+  // GODRIC GRYFFINDOR is written on the blade (just little lines, it is too small to read)
+  ctx.strokeStyle = 'rgba(120,130,150,.7)'; ctx.lineWidth = 1.2 * S;
+  for (let k = 0; k < 7; k++) { const x = len * (.2 + k * .07); ctx.beginPath(); ctx.moveTo(x, -bw * .22); ctx.lineTo(x + len * .04, -bw * .22); ctx.stroke(); }
+  // guard (gold), grip (brown leather), pommel with a ruby
+  ctx.fillStyle = '#e8c35a'; ctx.fillRect(len * .07, -bw * 1.8, bw * .9, bw * 3.6);
+  ctx.fillStyle = '#c0392b'; for (const y of [-1.25, 0, 1.25]) { ctx.beginPath(); ctx.arc(len * .07 + bw * .45, y * bw, bw * .32, 0, 7); ctx.fill(); }
+  ctx.fillStyle = '#5a3418'; ctx.fillRect(-len * .14, -bw * .38, len * .21, bw * .76);
+  ctx.strokeStyle = '#e8c35a'; ctx.lineWidth = 1.5 * S;
+  for (let k = 1; k < 5; k++) { const x = -len * .14 + k * len * .042; ctx.beginPath(); ctx.moveTo(x, -bw * .38); ctx.lineTo(x + len * .02, bw * .38); ctx.stroke(); }
+  ctx.fillStyle = '#e8c35a'; ctx.beginPath(); ctx.arc(-len * .16, 0, bw * .75, 0, 7); ctx.fill();
+  ctx.fillStyle = '#e0303a'; ctx.beginPath(); ctx.arc(-len * .16, 0, bw * .45, 0, 7); ctx.fill();
+  ctx.fillStyle = '#ffb3b8'; ctx.beginPath(); ctx.arc(-len * .16 - bw * .12, -bw * .14, bw * .14, 0, 7); ctx.fill();
+  ctx.restore();
+  // bright star at the tip
+  const r = (fast ? 40 : 22) * S;
+  ctx.globalCompositeOperation = 'lighter'; ctx.drawImage(swordGlow, w.tx - r, w.ty - r, r * 2, r * 2); ctx.globalCompositeOperation = 'source-over';
+}
+
+function drawFallbackFace(x, y, r) {
+  ctx.fillStyle = '#f6d2b0'; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+  ctx.fillStyle = '#2a1a10';
+  ctx.beginPath(); ctx.arc(x - r * .33, y - r * .1, r * .1, 0, 7); ctx.arc(x + r * .33, y - r * .1, r * .1, 0, 7); ctx.fill();
+  ctx.strokeStyle = '#2a1a10'; ctx.lineWidth = r * .08;
+  ctx.beginPath(); ctx.arc(x, y + r * .15, r * .35, 0.3, Math.PI - 0.3); ctx.stroke();
+}
+function glowText(t, x, y, size, col, weight = 900, font = 'Cinzel Decorative') { // soft glow = a wide see-through outline
+  ctx.font = `${weight} ${size}px "${font}", Georgia, serif`;
+  ctx.lineJoin = 'round'; ctx.strokeStyle = col; ctx.globalAlpha = .3; ctx.lineWidth = size * .22; ctx.strokeText(t, x, y);
+  ctx.globalAlpha = 1; ctx.fillStyle = '#fff'; ctx.fillText(t, x, y);
+  ctx.lineWidth = Math.max(1.5, size * .04); ctx.strokeText(t, x, y);
+}
+
+function draw() {
+  const t = performance.now() / 1000, now = performance.now();
+  ctx.fillStyle = '#0a1410'; ctx.fillRect(0, 0, W, H);
+  if (video.readyState >= 2) { // camera picture, mirrored, behind the chamber
+    ctx.save(); ctx.globalAlpha = 0.45; ctx.translate(W, 0); ctx.scale(-1, 1);
+    ctx.drawImage(video, 0, 0, W, H); ctx.restore();
+  }
+  ctx.drawImage(bg, 0, 0, W, H);
+  drawTorches(t);
+  drawCameraOver(ctx, video, W, H); // Camera setting: kids clearer
+
+  if (zones.length === 2) {
+    ctx.strokeStyle = 'rgba(247,200,67,.4)'; ctx.lineWidth = 4; ctx.setLineDash([20, 16]);
+    ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  for (const z of zones) {
+    const [x0, x1] = zoneX(z), mx = (x0 + x1) / 2;
+    ctx.save();
+    if (z.shake > 0) { ctx.translate(Math.sin(z.shake * 80) * 10 * S, 0); ctx.fillStyle = `rgba(255,0,0,${(z.shake * .4).toFixed(3)})`; ctx.fillRect(x0, 0, x1 - x0, H); }
+    for (const b of z.things) drawThing(b);
+    ctx.restore();
+  }
+  for (const p of pieces) drawPiece(p);
+  for (const z of zones) drawSword(z, now);
+
+  for (const z of zones) {
+    const [x0, x1] = zoneX(z), mx = (x0 + x1) / 2;
+    // score + face
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.fillStyle = z.color; ctx.font = `800 ${70 * S * (1 + z.pop * .15)}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillText(z.score, mx + 40 * S, 18 * S);
+    drawFallbackFace(mx - 50 * S, 55 * S, 42 * S);
+    drawKidFace(ctx, z.face, mx - 50 * S, 55 * S, 42 * S, z.color);
+    ctx.font = `600 ${24 * S}px "Cinzel Decorative", Georgia, serif`; ctx.fillStyle = '#fff';
+    ctx.fillText(z.face.name + ' · ' + z.level.name, mx, 104 * S);
+    if (z.swing >= 2 && state === 'play') { ctx.font = `800 ${28 * S}px "Cinzel", Georgia, serif`; ctx.fillStyle = GOLD; ctx.fillText(`⚔️ x${z.swing}`, mx, 138 * S); }
+    if (z.seenT > 1.5 && state !== 'end') {
+      ctx.font = `600 ${22 * S}px "Cinzel", Georgia, serif`; ctx.fillStyle = 'rgba(255,255,255,.75)'; ctx.textBaseline = 'top';
+      ctx.fillText('👀 Where are you? Step back!', mx, H * .55);
+    }
+  }
+
+  for (const p of particles) {
+    ctx.globalAlpha = Math.min(1, Math.max(0, p.life / 0.5)); ctx.fillStyle = p.col;
+    ctx.fillRect(p.x - p.r * S, p.y - p.r * S, p.r * 2 * S, p.r * 2 * S);
+  }
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const tx of texts) {
+    ctx.globalAlpha = Math.max(0, Math.min(1, tx.life / 0.5));
+    if (tx.big) glowText(tx.t, tx.x, tx.y, 64 * S * (zones.length === 2 ? .8 : 1), GOLD);
+    else { ctx.fillStyle = tx.col; ctx.font = `900 ${50 * S}px "Cinzel Decorative", Georgia, serif`; ctx.fillText(tx.t, tx.x, tx.y); }
+    if (tx.sub) { ctx.globalAlpha = Math.max(0, Math.min(1, tx.life / 0.5)); ctx.fillStyle = tx.col;
+      ctx.font = `800 ${26 * S}px "Cinzel", Georgia, serif`; ctx.fillText(tx.sub, tx.x, tx.y + (tx.big ? 58 : 42) * S); }
+  }
+  ctx.globalAlpha = 1;
+
+  ctx.fillStyle = '#fff';
+  if (state === 'play') {
+    ctx.font = `800 ${40 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillStyle = timeLeft < 10 ? '#ff6b6b' : '#fff';
+    ctx.fillText('⌛ ' + Math.ceil(timeLeft), W / 2, H - 36 * S);
+  }
+  if (state === 'count') {
+    const n = Math.ceil(countdown);
+    ctx.font = `900 ${220 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillText(n > 0 ? n : 'GO!', W / 2, H * 0.55);
+    ctx.font = `600 ${34 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillText('Hold the sword in both hands… and SWING!', W / 2, H * 0.55 + 150 * S);
+  }
+}
+
+// ---------- main loop ----------
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  poses = trackPoses(now); update(dt); draw();
+  requestAnimationFrame(loop);
+}
+addEventListener('resize', resize); resize();
+requestAnimationFrame(loop);
+startTracking(status);
+window.swordSprites = SPRITES; // for tests
+window.swordTest = () => ({ state, timeLeft, zones: zones.map(z => ({ score: z.score, slashed: z.slashed, friendsHit: z.friendsHit, bestCombo: z.bestCombo, things: z.things.length, sword: !!z.sword })) });
+</script>
+</body>
+</html>
