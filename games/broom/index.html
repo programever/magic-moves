@@ -48,7 +48,7 @@
     <button data-side="1" data-level="easy">Easy</button><button data-side="1" data-level="hard">Hard</button></div>
   <button id="home" onclick="location.href='../../'">🏠 All games</button>
   <button id="start">Start ▶</button>
-  <div class="help">Move your body left and right to steer your broom 🧹 Fly through the golden rings!<br>
+  <div class="help">Move your body left and right to steer your broom 🧹 Touch the golden rings!<br>
     Ring = 1 point. &nbsp; Big ring with a star = 3 points.<br>
     Both hands up high 🙌 = BOOST! Double points for 3 seconds.<br>
     Storm clouds and branches (Hard only) = minus 2. Fly around them!<br>
@@ -387,9 +387,13 @@ function update(dt) {
       o.p += dt * speed / z.level.travel;
       o.wob += dt * 3;
       if (o.hit) o.hit += dt;
+      // a ring counts as soon as the rider touches any part of it (no need to wait until it reaches her)
+      if (state === 'play' && o.kind === 'ring' && !o.hit && o.p > 0.7 && o.p < 1.2) {
+        const pos = place(z, o), rx = o.R * pos.sc * z.level.hit, ry = rx * 0.62;
+        if (Math.abs(z.x - pos.x) < rx + RIDER_HALF() && Math.abs(y - pos.y) < ry + 90 * S) hitThing(z, o);
+      }
       if (state === 'play' && before < 1 && o.p >= 1 && !o.hit) {
         const dx = Math.abs(z.x - o.u);
-        if (o.kind === 'ring' && dx < o.R * z.level.hit + (z.level.name === 'Easy' ? 30 * S : 0)) hitThing(z, o);
         if (o.kind === 'cloud' && dx < o.R * 0.75 + RIDER_HALF() * 0.6) hitThing(z, o);
         if (o.kind === 'branch' && dx < o.len / 2 + RIDER_HALF() * 0.5) hitThing(z, o);
       }
@@ -678,7 +682,7 @@ function draw() {
     ctx.font = `900 ${260 * S}px "Cinzel Decorative", Georgia, serif`;
     ctx.fillText(n > 0 ? n : 'GO!', W / 2, H / 2 - 60 * S);
     ctx.font = `600 ${36 * S}px "Cinzel Decorative", Georgia, serif`;
-    ctx.fillText('Fly through the golden rings!', W / 2, H / 2 + 110 * S);
+    ctx.fillText('Touch the golden rings!', W / 2, H / 2 + 110 * S);
   }
 }
 

@@ -10,7 +10,6 @@ games/<name>/        one folder per game (index.html + its own music/pictures)
   snitch/            Catch the Snitch: wand (right hand) catches flying Snitches, avoid Bludgers
   broom/             Broom Race: move body left/right through rings, both hands up = boost
   patronus/          Patronus vs Dementors: hold the wand on a Dementor to cast a Patronus
-  potion/            Potion Class: move body to catch recipe ingredients in a cauldron
   feather/           Wingardium Leviosa: keep falling feathers up with the wand
 shared/              used by every game
   tracking.js        camera + body tracking (MediaPipe pose, 2 players)

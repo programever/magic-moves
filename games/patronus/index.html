@@ -50,6 +50,7 @@
   <button id="home" onclick="location.href='../../'">🏠 All games</button>
   <button id="start">Start ▶</button>
   <div class="help">Right hand = magic wand ✨ Hold it on a Dementor until the silver ring is full.<br>
+    When your power bar is full, raise BOTH hands 🙌 to clear ALL Dementors!<br>
     Dementor = 1 point. Big Dementor = 3 points. Hard: Dementor at the castle = minus 1.<br>
     Keys: Space = start, Esc = menu, F = full screen, M = music, H = all games</div>
 </div>
@@ -84,8 +85,8 @@ function resize() {
 // every = seconds between new Dementors, r = size, v = fall speed, side = share that drift sideways,
 // hold = seconds to hold the wand still, big = share of Big Dementors, max = most on screen, miss = points lost at the castle
 const LEVELS = {
-  easy: { name: 'Easy', every: 2.2, rMin: 64, rMax: 74, vMin: 32, vMax: 48, side: 0, hold: 0.6, big: 0.15, max: 4, miss: 0 },
-  hard: { name: 'Hard', every: 1.1, rMin: 42, rMax: 50, vMin: 60, vMax: 95, side: 0.4, hold: 1.0, big: 0.15, max: 7, miss: 1 },
+  easy: { name: 'Easy', every: 2.2, rMin: 64, rMax: 74, vMin: 32, vMax: 48, side: 0, hold: 0.6, big: 0.15, max: 4, miss: 0, fill: 5 },
+  hard: { name: 'Hard', every: 1.5, rMin: 48, rMax: 56, vMin: 42, vMax: 68, side: 0.25, hold: 0.7, big: 0.15, max: 5, miss: 1, fill: 4 },
 };
 const ROUND = +new URLSearchParams(location.search).get('t') || 60, HAND_R = 34; // ?t=10 = 10 second round
 const FACES = { easy: KIDS.player1, hard: KIDS.player2 }; // Easy = player 1, Hard = player 2
@@ -191,15 +192,17 @@ function makeZones() {
   zones = [];
   for (let i = 0; i < settings.players; i++)
     zones.push({ i, level: LEVELS[settings.levels[i]], face: FACES[settings.levels[i]], score: 0, dems: [], pats: [],
-      spawnT: 0.3, color: COLORS[i], hands: [], flicker: 0 });
+      spawnT: 0.3, color: COLORS[i], hands: [], flicker: 0, power: 0, up: 0, wave: 0 });
 }
 const zoneX = z => { const w = W / zones.length; return [z.i * w, (z.i + 1) * w]; };
 const castleLine = () => H * 0.8; // a Dementor that gets this low has reached the castle
 
 function assignHands() {
-  zones.forEach(z => z.hands = []);
+  zones.forEach(z => { z.hands = []; z.handsUp = false; });
   for (const p of poses) {
     const z = zones.length === 1 ? zones[0] : zones[sx(p[0]) < W / 2 ? 0 : 1];
+    const seen = i => (p[i].visibility ?? 1) > 0.5;
+    if (seen(15) && seen(16) && p[15].y < p[0].y && p[16].y < p[0].y) z.handsUp = true; // both wrists above the nose
     for (const [wrist, finger] of [[16, 20]]) { // right hand only (16 = right wrist, 20 = right finger)
       if ((p[wrist].visibility ?? 1) < 0.3) continue;
       const f = (p[finger].visibility ?? 1) > 0.3 ? p[finger] : p[wrist];
@@ -229,6 +232,16 @@ function spawn(z) {
     ph: rand(0, 6.28), st: 'fly', a: 1, rot: 0, blink: rand(2, 5) });
 }
 
+// SUPER PATRONUS: when the power meter is full, raise BOTH hands up: a big wave of light clears every Dementor.
+function superCast(z) {
+  if (state !== 'play' || z.power < 1) return;
+  z.power = 0; z.wave = 0.001; sfx('big'); sfx('cast');
+  const [x0, x1] = zoneX(z), cx = (x0 + x1) / 2;
+  texts.push({ x: cx, y: H * 0.45, t: 'EXPECTO PATRONUM!!', life: 1.8, col: '#ffe680', size: 54 });
+  for (const d of z.dems) if (d.st === 'fly' || d.st === 'locked') banish(z, d, { dir: d.x < cx ? -1 : 1 });
+  z.power = 0; // banish() filled it a little; start empty again
+}
+
 // Hold the wand on a Dementor: the ring fills. Full ring = cast the Patronus.
 function cast(z, d, h) {
   d.st = 'locked'; d.hold = d.need;
@@ -249,7 +262,7 @@ function banish(z, d, p) {
   d.st = 'hit'; d.t = 0;
   d.vx = p.dir * 420 * S; d.vy = -380 * S; d.spin = p.dir * 9;
   const pts = d.big ? 3 : 1;
-  if (state === 'play') z.score += pts; // no points after the round ended (the end screen is already shown)
+  if (state === 'play') { z.score += pts; z.power = Math.min(1, z.power + 1 / z.level.fill); } // no points after the round ended (the end screen is already shown)
   sfx(d.big ? 'big' : 'chime');
   for (let k = 0; k < (d.big ? 30 : 18); k++) {
     const a = rand(0, 6.28), v = rand(150, 450) * S;
@@ -302,6 +315,7 @@ addEventListener('keydown', e => {
   if (e.code === 'Space' && state !== 'play' && state !== 'count') startGame();
   if (e.code === 'Escape') toMenu();
   if (e.code === 'KeyH') location.href = '../../';
+  if (e.code === 'KeyP') zones.forEach(superCast); // test key: super Patronus
   if (e.code === 'KeyM') { musicOn = !musicOn; if (musicOn && (state === 'play' || state === 'count')) startMusic(); else { stopMusic(); stopWinnerSong(); } }
   if (e.code === 'KeyF') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
 });
@@ -324,6 +338,10 @@ function update(dt) {
   for (const z of zones) {
     const [x0, x1] = zoneX(z), L = z.level;
     z.flicker = Math.max(0, z.flicker - dt);
+    if (state === 'play') z.power = Math.min(1, z.power + dt / 25); // fills by itself in 25 s too
+    if (z.wave) { z.wave += dt; if (z.wave > 1.2) z.wave = 0; }
+    z.up = z.handsUp ? z.up + dt : 0;
+    if (z.up > 0.15) superCast(z);
     if (state === 'play') {
       z.spawnT -= dt;
       if (z.spawnT <= 0) { spawn(z); z.spawnT = L.every * rand(0.7, 1.3); }
@@ -638,6 +656,13 @@ function draw() {
     for (const d of z.dems) drawRing(d);
     ctx.restore();
     for (const p of z.pats) drawPatronus(p, t);
+    if (z.wave) { // big wave of silver light rising from the castle
+      const k = z.wave / 1.2, cx = (x0 + x1) / 2;
+      ctx.save(); ctx.beginPath(); ctx.rect(x0, 0, x1 - x0, H); ctx.clip();
+      ctx.globalAlpha = 0.6 * (1 - k); ctx.fillStyle = SILVER; ctx.fillRect(x0, 0, x1 - x0, H);
+      ctx.globalAlpha = 1 - k; ctx.strokeStyle = '#fff'; ctx.lineWidth = 30 * S * (1 - k) + 4;
+      ctx.beginPath(); ctx.arc(cx, H, k * H * 1.4, 0, 7); ctx.stroke(); ctx.restore();
+    }
     // right hand = a glowing star at the wand tip
     for (const h of z.hands) {
       glow(BLUE_GLOW, h.x, h.y, HAND_R * S * 1.8, 0.7);
@@ -652,6 +677,13 @@ function draw() {
     drawFace(z.face, (x0 + x1) / 2 - 50 * S, 55 * S, 42 * S, z.color);
     ctx.font = `600 ${24 * S}px "Cinzel Decorative", Georgia, serif`; ctx.fillStyle = '#fff';
     ctx.fillText(z.face.name + ' · ' + z.level.name, (x0 + x1) / 2, 100 * S);
+    // power meter: full = raise both hands for the SUPER PATRONUS
+    const mw = 170 * S, mx = (x0 + x1) / 2 - mw / 2, my = 132 * S, full = z.power >= 1;
+    ctx.fillStyle = 'rgba(0,0,0,.45)'; ctx.fillRect(mx, my, mw, 14 * S);
+    ctx.fillStyle = full ? (Math.sin(t * 8) > 0 ? '#ffe680' : '#fff') : SILVER; ctx.fillRect(mx, my, mw * z.power, 14 * S);
+    ctx.strokeStyle = 'rgba(255,255,255,.7)'; ctx.lineWidth = 2; ctx.strokeRect(mx, my, mw, 14 * S);
+    ctx.font = `700 ${(full ? 26 : 17) * S}px "Cinzel", Georgia, serif`; ctx.fillStyle = full ? '#ffe680' : '#cfe6ff';
+    ctx.fillText(full ? '🙌 Raise both hands!' : 'Super Patronus…', (x0 + x1) / 2, my + 20 * S);
   }
   if (zones.length === 2) {
     ctx.strokeStyle = 'rgba(191,230,255,.4)'; ctx.lineWidth = 4; ctx.setLineDash([20, 16]);
