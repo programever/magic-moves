@@ -1,0 +1,867 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Dragon Egg Hunt</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Cinzel:wght@600;800&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; height: 100%; background: #1a0e0a; overflow: hidden;
+    font-family: "Cinzel", Georgia, serif; color: #fff; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; }
+  video { display: none; }
+  .overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 22px; background: rgba(26, 14, 10, .86); text-align: center; }
+  .hidden { display: none !important; }
+  h1 { font-family: "Cinzel Decorative", Georgia, serif; font-size: 72px; margin: 0; color: #f7c843;
+    text-shadow: 0 0 25px #ff7a0088; }
+  #end { background: rgba(26, 14, 10, .55); gap: 10px; }
+  #end h1 { font-size: 44px; }
+  #trophy { display: flex; gap: 60px; }
+  .cup { position: relative; width: 170px; filter: drop-shadow(0 0 25px #ffd700);
+    animation: shine 1.2s ease-in-out infinite alternate; }
+  .cup svg { width: 170px; display: block; }
+  .cupface { position: absolute; left: 50%; top: 65px; transform: translate(-50%, -50%); }
+  .cupface img { width: 72px !important; height: 72px !important; }
+  @keyframes shine { from { transform: rotate(-4deg) scale(1); } to { transform: rotate(4deg) scale(1.07); } }
+  .row { display: flex; gap: 14px; align-items: center; font-size: 28px; }
+  .row span { width: 220px; text-align: right; }
+  button { font: inherit; font-size: 28px; padding: 12px 28px; border-radius: 40px; border: 3px solid #fff3;
+    background: #ffffff14; color: #fff; cursor: pointer; }
+  button.on { background: #f7c843; border-color: #f7c843; color: #2a1600; font-weight: 800; }
+  #start, .again { font-size: 40px; padding: 18px 60px; background: #7f0909; border-color: #f7c843;
+    color: #f7e7b0; font-weight: 800; }
+  .help { font-size: 22px; opacity: .8; max-width: 950px; line-height: 1.5; }
+  #status { position: fixed; bottom: 20px; left: 0; right: 0; text-align: center; font-size: 26px; }
+  #result { font-size: 28px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="menu" class="overlay">
+  <h1>🐉 Dragon Egg Hunt 🥚</h1>
+  <div class="row"><span>Players</span>
+    <button data-players="1">1 player</button><button data-players="2">2 players</button></div>
+  <div class="row" id="lvl0"><span id="lvl0name">Left player</span>
+    <button data-side="0" data-level="easy">Easy</button><button data-side="0" data-level="hard">Hard</button></div>
+  <div class="row" id="lvl1"><span>Right player</span>
+    <button data-side="1" data-level="easy">Easy</button><button data-side="1" data-level="hard">Hard</button></div>
+  <button id="home" onclick="location.href='../../'">🏠 All games</button>
+  <button id="start">Start ▶</button>
+  <div class="help">The dragon is sleeping 😴 Touch the golden eggs with your right hand (your wand) ✨<br>
+    Egg = 1 point. &nbsp; Shiny rainbow egg = 3 points.<br>
+    When the dragon wakes up: FREEZE! 🧊 Don't move! Stay still = +2 Brave!<br>
+    Keys: Space = start, Esc = menu, F = full screen, M = music on/off<br>
+    Test: mouse = wand, hold ← → (left player) or A D (right player) = "moving"</div>
+</div>
+
+<div id="end" class="overlay hidden">
+  <h1 id="endTitle"></h1>
+  <div id="trophy"></div>
+  <div id="result"></div>
+  <button class="again">Play again ▶</button>
+  <button id="toMenu">Menu</button>
+</div>
+
+<div id="status"></div>
+
+<script type="module">
+import { video, startTracking, track as trackPoses } from '../../shared/tracking.js';
+import { KIDS, drawKidFace, kidImg } from '../../shared/kids.js';
+
+const $ = s => document.querySelector(s);
+const canvas = $('#c'), ctx = canvas.getContext('2d');
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+let W, H, S, bg = null;
+function resize() {
+  const d = devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight; S = H / 900;
+  canvas.width = W * d; canvas.height = H * d; ctx.setTransform(d, 0, 0, d, 0, 0);
+  bg = null; // the rocky arena is drawn again at the new size
+}
+addEventListener('resize', resize); resize();
+
+// ---------- settings ----------
+// sleep/awake = seconds, warn = warning before the dragon opens her eyes,
+// still = how much moving is allowed while awake (in shoulder-widths per second), drain = seconds of moving before the roar
+const LEVELS = {
+  easy: { name: 'Easy', sleep: [5, 8], warn: 1.5, awake: [2, 3], still: 0.75, drain: 0.8, grace: 0.6, lose: 1,
+          every: 1.1, maxEggs: 5, r: 44, life: 8, shiny: 0.12 },
+  hard: { name: 'Hard', sleep: [3.5, 6.5], warn: 1.0, awake: [2.5, 4], still: 0.4, drain: 0.4, grace: 0.35, lose: 2,
+          every: 0.8, maxEggs: 6, r: 32, life: 5.5, shiny: 0.08 },
+};
+const ROUND = +new URLSearchParams(location.search).get('t') || 60, HAND_R = 34; // ?t=10 = 10 second round
+const BRAVE = 2;
+const FACES = { easy: KIDS.player1, hard: KIDS.player2 }; // Easy = player 1, Hard = player 2
+const drawFace = (f, x, y, r, ring) => drawKidFace(ctx, f, x, y, r, ring);
+const COLORS = ['#ff6b5b', '#6fb4ff'];
+const settings = { players: 2, levels: ['easy', 'hard'] };
+
+function refreshMenu() {
+  document.querySelectorAll('[data-players]').forEach(b => b.classList.toggle('on', +b.dataset.players === settings.players));
+  document.querySelectorAll('[data-level]').forEach(b => b.classList.toggle('on', settings.levels[b.dataset.side] === b.dataset.level));
+  $('#lvl1').classList.toggle('hidden', settings.players === 1);
+  $('#lvl0name').textContent = settings.players === 1 ? 'Level' : 'Left player';
+}
+document.querySelectorAll('[data-players]').forEach(b => b.onclick = () => { settings.players = +b.dataset.players; refreshMenu(); });
+document.querySelectorAll('[data-level]').forEach(b => b.onclick = () => { settings.levels[b.dataset.side] = b.dataset.level; refreshMenu(); });
+refreshMenu();
+
+// ---------- sound ----------
+let ac;
+function tone(type, f1, f2, dur, vol, delay = 0) {
+  const t = ac.currentTime + delay, o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.connect(g); g.connect(ac.destination);
+  o.frequency.setValueAtTime(f1, t); o.frequency.exponentialRampToValueAtTime(f2, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function sfx(kind) {
+  if (!ac) return;
+  if (kind === 'egg') [1319, 1760, 2093].forEach((f, i) => tone('sine', f, f, 0.18, 0.22, i * 0.05));
+  if (kind === 'shiny') [988, 1319, 1568, 1976, 2637].forEach((f, i) => tone('sine', f, f, 0.25, 0.25, i * 0.06));
+  if (kind === 'rumble') { // the dragon starts to wake: a low tummy rumble and a sleepy "hmm?"
+    tone('sine', 55, 45, 1.2, 0.5); tone('triangle', 75, 60, 0.9, 0.25, 0.1); tone('sine', 220, 330, 0.35, 0.12, 0.8);
+  }
+  if (kind === 'wake') { tone('triangle', 330, 660, 0.12, 0.2); tone('triangle', 440, 880, 0.12, 0.2, 0.12); }
+  if (kind === 'roar') { // a grumpy, silly "RAWR… pfff"
+    tone('sawtooth', 220, 110, 0.5, 0.18); tone('sawtooth', 165, 80, 0.55, 0.12, 0.05); tone('sine', 110, 60, 0.6, 0.35);
+    tone('square', 900, 300, 0.25, 0.05, 0.55);
+  }
+  if (kind === 'brave') [784, 988, 1175, 1568].forEach((f, i) => tone('triangle', f, f, 0.22, 0.25, i * 0.09));
+  if (kind === 'snore') tone('sine', 120, 70, 0.9, 0.06);
+  if (kind === 'beep') tone('square', 600, 600, 0.12, 0.15);
+  if (kind === 'go') tone('square', 900, 900, 0.3, 0.15);
+  if (kind === 'end') // trumpet fanfare
+    [[523, 0, .15], [523, .18, .15], [523, .36, .15], [698, .54, .35], [880, .92, .2], [784, 1.12, .2], [1047, 1.32, .9]]
+      .forEach(([f, d, len]) => { tone('sawtooth', f, f, len, 0.12, d); tone('triangle', f, f, len, 0.25, d); });
+}
+
+// ---------- background music (made by code: a magic waltz in E minor, 3 beats per bar) ----------
+const MELODY = [76, 79, 83,  84, 83, 79,  81, 76, 72,  75, 78, 71,
+                83, 79, 76,  79, 84, 88,  84, 81, 76,  78, 75, 71];
+const ROOTS = [40, 36, 45, 47], STEP = 60 / 150;
+let musicOn = true, musicTimer = null, musicStep = 0, nextNote = 0, musicGain = null;
+const midi = m => 440 * 2 ** ((m - 69) / 12);
+function note(freq, t, dur, type, vol) {
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.frequency.value = freq; o.connect(g); g.connect(musicGain);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function playStep(i, t) {
+  const m = MELODY[i % 24], beat = i % 3, root = ROOTS[Math.floor(i / 3) % 4];
+  note(midi(m), t, 1.0, 'sine', 0.45); note(midi(m + 12), t, 0.35, 'sine', 0.15); // bell sound
+  if (beat === 0) note(midi(root), t, STEP * 2.5, 'triangle', 0.6);
+  else note(midi(root + 12 + (beat === 1 ? 7 : 12)), t, STEP * 0.8, 'triangle', 0.25);
+}
+// Real music files from Iker (shared/music/, not in git). If a file can't play, the code waltz plays instead.
+const gameSong = new Audio('../../shared/music/game.mp3'), winnerSong = new Audio('../../shared/music/winner.mp3');
+gameSong.loop = true; gameSong.volume = 0.5; winnerSong.volume = 0.7;
+let winnerTimer = null;
+function startMusic() {
+  if (!musicOn) return;
+  stopWinnerSong();
+  gameSong.currentTime = 0; gameSong.volume = 0.5;
+  gameSong.play().catch(startSynth);
+}
+function stopMusic() { gameSong.pause(); stopSynth(); }
+function playWinnerSong() {
+  if (!musicOn) return;
+  winnerTimer = setTimeout(() => { winnerSong.currentTime = 0; winnerSong.play().catch(() => {}); }, 2200); // after the trumpet
+}
+function stopWinnerSong() { clearTimeout(winnerTimer); winnerSong.pause(); }
+function startSynth() {
+  if (!ac || !musicOn || musicTimer) return;
+  musicGain = ac.createGain(); musicGain.gain.value = 0.12; musicGain.connect(ac.destination);
+  musicStep = 0; nextNote = ac.currentTime + 0.05;
+  musicTimer = setInterval(() => {
+    while (nextNote < ac.currentTime + 0.12) { playStep(musicStep++, nextNote); nextNote += STEP; }
+  }, 25);
+}
+function stopSynth() {
+  if (!musicTimer) return;
+  clearInterval(musicTimer); musicTimer = null;
+  musicGain.gain.setTargetAtTime(0, ac.currentTime, 0.1);
+}
+// music gets quiet while a dragon is awake (so the kids hear the rumble and feel the "shh")
+function duckMusic(dt) {
+  const quiet = state === 'play' && zones.some(z => z.phase !== 'sleep');
+  const k = Math.min(1, dt * 4);
+  if (!gameSong.paused) gameSong.volume = clamp(gameSong.volume + ((quiet ? 0.15 : 0.5) - gameSong.volume) * k, 0, 1);
+  if (musicTimer) musicGain.gain.value += ((quiet ? 0.035 : 0.12) - musicGain.gain.value) * k;
+}
+
+// ---------- camera + body tracking ----------
+let poses = [];
+const status = t => $('#status').textContent = t;
+const setup = () => startTracking(status);
+const track = now => { poses = trackPoses(now); };
+
+// Camera is mirrored, so x is flipped. Video is stretched to fill the screen.
+const sx = lm => (1 - lm.x) * W, sy = lm => lm.y * H;
+const visible = lm => lm && (lm.visibility ?? 1) > 0.5;
+
+// ---------- game state ----------
+let state = 'menu', timeLeft = 0, countdown = 0, zones = [], particles = [], texts = [], mouse = null;
+const keys = new Set();
+
+function makeZones() {
+  zones = [];
+  for (let i = 0; i < settings.players; i++) {
+    const level = LEVELS[settings.levels[i]];
+    zones.push({ i, level, face: FACES[settings.levels[i]], score: 0, color: COLORS[i], hands: [],
+      eggs: [], spawnT: 0.5, eggsGot: 0, braveN: 0, oops: 0,
+      phase: 'sleep', pt: 0, dur: rand(4, 6), // first nap
+      penalized: false, seen: false, calm: 1, motion: 0, hist: [], sm: null, lostT: 0, body: false,
+      flash: 0, roar: 0, wing: 0, puffs: [], zT: 0.5, smokeT: 0.3, snoreT: 1, msg: null });
+  }
+}
+const zoneX = z => { const w = W / zones.length; return [z.i * w, (z.i + 1) * w]; };
+const zoneOf = x => zones.length === 1 ? zones[0] : zones[x < W / 2 ? 0 : 1];
+
+// Each body goes to the half where its nose is. If there are more bodies in one half, the biggest (closest) one counts.
+function assignBodies(dt) {
+  const best = zones.map(() => null);
+  for (const p of poses) {
+    if (!p[0] || !visible(p[11]) || !visible(p[12])) continue;
+    const z = zoneOf(sx(p[0]));
+    const sw = Math.hypot(sx(p[11]) - sx(p[12]), sy(p[11]) - sy(p[12]));
+    if (!best[z.i] || sw > best[z.i].sw) best[z.i] = { p, sw };
+  }
+  zones.forEach(z => {
+    z.hands = [];
+    const b = best[z.i];
+    if (b) { // right hand only (16 = right wrist, 20 = right finger)
+      const p = b.p;
+      if (visible(p[16])) { const f = visible(p[20]) ? p[20] : p[16]; z.hands.push({ x: sx(f), y: sy(f) }); }
+    }
+    updateMotion(z, b, dt);
+  });
+  if (mouse && zones.length) zoneOf(mouse.x).hands.push(mouse);
+}
+
+// How much is she moving? Nose, shoulders and wrists are smoothed, then each point is compared with
+// where it was 0.3 s ago. Measured in shoulder-widths per second, so it is the same near or far from the camera.
+const BODY_POINTS = [0, 11, 12, 15, 16], LOOK_BACK = 0.3;
+function updateMotion(z, b, dt) {
+  const now = performance.now() / 1000;
+  if (!b || b.sw < 15) {
+    z.body = false; z.lostT += dt;
+    if (z.lostT > 0.4) { z.sm = null; z.hist = []; }
+    z.motion *= Math.exp(-dt * 6);
+    return;
+  }
+  z.body = true; z.lostT = 0;
+  const p = b.p, a = 1 - Math.exp(-dt / 0.1);
+  if (!z.sm) z.sm = BODY_POINTS.map(k => ({ x: sx(p[k]), y: sy(p[k]), ok: visible(p[k]) }));
+  BODY_POINTS.forEach((k, j) => {
+    const s = z.sm[j], q = p[k], ok = visible(q);
+    if (ok && !s.ok) { s.x = sx(q); s.y = sy(q); } // point came back: jump there, do not count it as moving
+    else if (ok) { s.x += (sx(q) - s.x) * a; s.y += (sy(q) - s.y) * a; }
+    s.ok = ok;
+  });
+  z.hist.push({ t: now, pts: z.sm.map(s => ({ x: s.x, y: s.y, ok: s.ok })) });
+  while (z.hist.length > 2 && z.hist[1].t <= now - LOOK_BACK) z.hist.shift();
+  const old = z.hist[0], span = now - old.t;
+  let speed = 0;
+  if (span > 0.1) {
+    let sum = 0, n = 0;
+    z.sm.forEach((s, j) => { if (s.ok && old.pts[j].ok) { sum += Math.hypot(s.x - old.pts[j].x, s.y - old.pts[j].y); n++; } });
+    if (n) speed = sum / n / span / b.sw;
+  }
+  z.motion += (speed - z.motion) * (1 - Math.exp(-dt * 8));
+}
+
+// test keys: holding an arrow = player 1 is "moving", A or D = player 2 (both = the only player in 1-player mode)
+function keyMoving(z) {
+  const p1 = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].some(k => keys.has(k));
+  const p2 = keys.has('KeyA') || keys.has('KeyD');
+  return zones.length === 1 ? p1 || p2 : z.i === 0 ? p1 : p2;
+}
+
+// ---------- eggs ----------
+function spawnEgg(z) {
+  const L = z.level, [x0, x1] = zoneX(z), shiny = Math.random() < L.shiny, r = L.r * S * (shiny ? 1.1 : 1);
+  for (let k = 0; k < 10; k++) {
+    const x = rand(x0 + r * 2.2, x1 - r * 2.2), y = rand(H * 0.47, H * 0.84);
+    if (z.eggs.every(e => Math.hypot(e.x - x, e.y - y) > r * 4) && // not right on top of another egg or the wand
+        z.hands.every(h => Math.hypot(h.x - x, h.y - y) > r * 3 + HAND_R * S)) {
+      z.eggs.push({ x, y, r, shiny, age: 0, p: rand(0, 6.28) });
+      return;
+    }
+  }
+}
+
+function collect(z, e) {
+  e.dead = true;
+  const pts = e.shiny ? 3 : 1;
+  z.score += pts; z.eggsGot++;
+  sfx(e.shiny ? 'shiny' : 'egg');
+  const cols = e.shiny ? ['#ff9ad5', '#9be7ff', '#fff1b0', '#c3a6ff'] : ['#ffd84a', '#fff1b0'];
+  for (let k = 0; k < (e.shiny ? 22 : 12); k++) {
+    const a = rand(0, 6.28), v = rand(150, 400) * S;
+    particles.push({ x: e.x, y: e.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0.6, col: cols[k % cols.length] });
+  }
+  texts.push({ x: e.x, y: e.y, t: '+' + pts, life: 0.9, col: e.shiny ? '#ffb3e6' : '#ffd84a' });
+}
+
+// ---------- the dragon's day: sleep -> warn -> awake -> sleep ----------
+function setPhase(z, phase, dur = 0) { z.phase = phase; z.pt = 0; z.dur = dur; }
+
+function updateDragon(z, dt) {
+  const L = z.level;
+  z.pt += dt;
+  if (z.phase === 'sleep' && z.pt >= z.dur) {
+    setPhase(z, 'warn', L.warn); sfx('rumble');
+    z.msg = null;
+  } else if (z.phase === 'warn' && z.pt >= z.dur) {
+    setPhase(z, 'awake', rand(...L.awake)); sfx('wake');
+    z.penalized = false; z.seen = false; z.calm = 1;
+  } else if (z.phase === 'awake') {
+    const moving = keyMoving(z) || (z.body && z.motion > L.still);
+    if (z.body || keyMoving(z) || (mouse && zoneOf(mouse.x) === z)) z.seen = true; // somebody is playing here
+    if (!z.penalized && z.pt > L.grace) {
+      if (moving) z.calm -= dt / L.drain;
+      else z.calm = Math.min(1, z.calm + dt * 0.6);
+      if (z.calm <= 0) roarAt(z);
+    }
+    if (z.pt >= z.dur) {
+      if (!z.penalized && z.seen) { // held still the whole time
+        z.score += BRAVE; z.braveN++; sfx('brave');
+        const [x0, x1] = zoneX(z);
+        texts.push({ x: (x0 + x1) / 2, y: H * 0.62, t: `+${BRAVE} Brave! 🦁`, life: 1.6, col: '#7dff8a', big: true });
+        for (let k = 0; k < 24; k++)
+          particles.push({ x: rand(x0, x1), y: H * 0.62 + rand(-40, 40) * S, vx: rand(-80, 80) * S, vy: rand(-300, -100) * S,
+            life: 1, col: k % 2 ? '#7dff8a' : '#fff1b0', r: rand(3, 6) });
+      }
+      setPhase(z, 'sleep', rand(...L.sleep));
+    }
+  }
+}
+
+function roarAt(z) {
+  z.penalized = true; z.calm = 0; z.oops++;
+  const lose = Math.min(z.score, z.level.lose);
+  z.score -= lose;
+  z.roar = 1.2; z.flash = 0.7; sfx('roar');
+  z.msg = { t: 'Oops! You moved! 😝', life: 1.8 };
+  const [x0, x1] = zoneX(z);
+  texts.push({ x: (x0 + x1) / 2, y: H * 0.72, t: lose ? '-' + lose : 'Oops!', life: 1.2, col: '#ff9a3c', big: true });
+}
+
+// ---------- start / end ----------
+function startGame() {
+  if (!ac) ac = new AudioContext();
+  ac.resume();
+  stopMusic(); startMusic();
+  makeZones(); particles = []; texts = []; bg = null;
+  $('#menu').classList.add('hidden'); $('#end').classList.add('hidden');
+  state = 'count'; countdown = 3.99; lastBeep = 4;
+}
+let lastBeep = 4;
+
+function endGame() {
+  state = 'end'; stopMusic(); sfx('end'); playWinnerSong();
+  zones.forEach(z => { z.eggs = []; z.msg = null; });
+  const best = Math.max(...zones.map(z => z.score)), winners = zones.filter(z => z.score === best);
+  $('#endTitle').textContent = zones.length === 1 ? `${zones[0].face.name}, Dragon Tamer!`
+    : winners.length === 2 ? 'A tie! Two champions!' : `${winners[0].face.name} wins the Triwizard Cup!`;
+  $('#trophy').innerHTML = winners.map(z => `<div class="cup">${CUP}<div class="cupface">${faceImg(z.face, '#fff6c8')}</div></div>`).join('');
+  $('#result').innerHTML = zones.map(z =>
+    `<span style="color:${z.color}">${faceImg(z.face, z.color)} ${z.face.name} (${z.level.name}): <b>${z.score}</b> points</span>` +
+    `<br><span style="font-size:22px;opacity:.85">🥚 ${z.eggsGot} eggs &nbsp; 🦁 ${z.braveN} brave</span>`).join('<br>');
+  $('#end').classList.remove('hidden');
+}
+const CUP = `<svg viewBox="0 0 200 240"><defs><linearGradient id="gold" x1="0" x2="1">
+  <stop offset="0" stop-color="#8a5a00"/><stop offset=".35" stop-color="#fff1b0"/><stop offset=".6" stop-color="#f5c542"/>
+  <stop offset="1" stop-color="#8a5a00"/></linearGradient></defs>
+  <path d="M48 35 C5 35 5 105 62 112" fill="none" stroke="url(#gold)" stroke-width="12"/>
+  <path d="M152 35 C195 35 195 105 138 112" fill="none" stroke="url(#gold)" stroke-width="12"/>
+  <path d="M38 20 H162 C162 105 132 135 100 140 C68 135 38 105 38 20Z" fill="url(#gold)"/>
+  <rect x="90" y="138" width="20" height="38" fill="url(#gold)"/>
+  <path d="M62 176 H138 L150 202 H50Z" fill="url(#gold)"/>
+  <rect x="36" y="202" width="128" height="30" rx="5" fill="#7f0909" stroke="#f5c542" stroke-width="3"/>
+  <text x="100" y="223" text-anchor="middle" font-family="Cinzel, Georgia, serif" font-weight="800" font-size="17"
+    fill="#f7e7b0">⚡ CHAMPION ⚡</text></svg>`;
+const faceImg = kidImg;
+function toMenu() {
+  state = 'menu'; zones = []; stopMusic(); stopWinnerSong();
+  $('#end').classList.add('hidden'); $('#menu').classList.remove('hidden');
+}
+
+$('#start').onclick = startGame;
+document.querySelector('.again').onclick = startGame;
+$('#toMenu').onclick = toMenu;
+addEventListener('keydown', e => {
+  keys.add(e.code);
+  if (e.code.startsWith('Arrow') || e.code === 'Space') e.preventDefault();
+  if (e.repeat) return;
+  if (e.code === 'Space' && state !== 'play' && state !== 'count') startGame();
+  if (e.code === 'Escape') toMenu();
+  if (e.code === 'KeyH') location.href = '../../';
+  if (e.code === 'KeyM') { musicOn = !musicOn; if (musicOn && (state === 'play' || state === 'count')) startMusic(); else { stopMusic(); stopWinnerSong(); } }
+  if (e.code === 'KeyF') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+});
+addEventListener('keyup', e => keys.delete(e.code));
+addEventListener('blur', () => keys.clear());
+addEventListener('mousemove', e => mouse = { x: e.clientX, y: e.clientY });
+document.addEventListener('mouseleave', () => mouse = null);
+
+// ---------- update ----------
+function update(dt) {
+  if (state === 'count') {
+    countdown -= dt;
+    const n = Math.ceil(countdown);
+    if (n < lastBeep) { lastBeep = n; sfx(n > 0 ? 'beep' : 'go'); }
+    if (countdown <= 0) { state = 'play'; timeLeft = ROUND; }
+  } else if (state === 'play') {
+    timeLeft -= dt;
+    if (timeLeft <= 0) { timeLeft = 0; endGame(); }
+  }
+  if (zones.length) assignBodies(dt);
+  duckMusic(dt);
+
+  for (const z of zones) {
+    const L = z.level;
+    z.flash = Math.max(0, z.flash - dt); z.roar = Math.max(0, z.roar - dt);
+    if (z.msg && (z.msg.life -= dt) <= 0) z.msg = null;
+    if (state === 'play') updateDragon(z, dt);
+    const awake = z.phase !== 'sleep' || state === 'end';
+    z.wing += ((z.phase === 'awake' ? 1 : z.phase === 'warn' ? 0.4 : 0) - z.wing) * Math.min(1, dt * 6);
+
+    // eggs appear only while the dragon sleeps
+    if (state === 'play' && z.phase === 'sleep') {
+      z.spawnT -= dt;
+      if (z.spawnT <= 0 && z.eggs.length < L.maxEggs) { spawnEgg(z); z.spawnT = L.every * rand(0.7, 1.3); }
+    }
+    for (const e of z.eggs) {
+      if (!awake) e.age += dt; // eggs wait while the dragon is awake
+      if (state === 'play' && z.phase === 'sleep' && e.age < L.life &&
+          z.hands.some(h => Math.hypot(h.x - e.x, h.y - e.y) < e.r * 1.25 + HAND_R * S)) collect(z, e);
+    }
+    z.eggs = z.eggs.filter(e => !e.dead && e.age < L.life + 0.4);
+
+    // snore Z z z, smoke puffs from the nose, fire puff when she roars
+    const d = dragonPos(z);
+    if (z.phase === 'sleep' && state !== 'end') {
+      if ((z.zT -= dt) <= 0) {
+        z.zT = 0.9;
+        z.puffs.push({ kind: 'z', x: d.x + 35 * d.u, y: d.y - 5 * d.u, vx: 30 * S, vy: -45 * S, life: 2.2, big: z.puffs.length % 2 });
+      }
+      if ((z.smokeT -= dt) <= 0) {
+        z.smokeT = rand(0.4, 0.7);
+        const side = Math.random() < 0.5 ? -1 : 1;
+        z.puffs.push({ kind: 'smoke', x: d.x + side * 14 * d.u, y: d.y + 46 * d.u, vx: side * rand(50, 80) * S, vy: -rand(15, 35) * S,
+          life: 1.4, r: rand(5, 8) * d.u / 1.4 });
+      }
+      if ((z.snoreT -= dt) <= 0) { z.snoreT = 2.7; if (state === 'play') sfx('snore'); }
+    }
+    if (z.roar > 0.7) // a puff of fire toward her side (downward), then smoke
+      for (let k = 0; k < 3; k++) {
+        const a = Math.PI / 2 + rand(-0.45, 0.45), v = rand(260, 480) * S;
+        z.puffs.push({ kind: 'fire', x: d.x, y: d.y + 58 * d.u, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0.75, r: rand(8, 14) * S });
+      }
+    for (const p of z.puffs) {
+      p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
+      if (p.kind === 'fire') { p.vx *= 1 - dt * 2.5; p.vy *= 1 - dt * 2.5; p.r += 55 * S * dt; }
+      if (p.kind === 'smoke') p.r += 6 * S * dt;
+    }
+    z.puffs = z.puffs.filter(p => p.life > 0);
+
+    for (const h of z.hands) // magic sparkles from the wand
+      particles.push({ x: h.x + rand(-10, 10) * S, y: h.y + rand(-10, 10) * S, vx: rand(-60, 60) * S, vy: rand(-60, 20) * S,
+        life: 0.5, col: Math.random() < 0.5 ? '#fff1b0' : z.color, r: rand(2, 5) });
+  }
+  if (state === 'end' && Math.random() < 0.6) // golden confetti for the champion
+    particles.push({ x: rand(0, W), y: -10, vx: rand(-40, 40) * S, vy: rand(50, 150) * S, life: 3,
+      col: ['#f7c843', '#fff1b0', '#ff6b5b', '#ffffff'][Math.floor(rand(0, 4))], r: rand(3, 7), g: 20 });
+  for (const p of particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += (p.g ?? 500) * S * dt; p.life -= dt; }
+  particles = particles.filter(p => p.life > 0);
+  for (const t of texts) { t.y -= 70 * S * dt; t.life -= dt; }
+  texts = texts.filter(t => t.life > 0);
+}
+
+// ---------- draw: rocky arena (drawn once into a hidden canvas, then copied every frame) ----------
+const ROCKS = Array.from({ length: 16 }, () => ({ x: Math.random(), w: rand(0.03, 0.07), h: rand(0.02, 0.05) }));
+const WALL = Array.from({ length: 12 }, (_, i) => ({ y: i / 11, d: rand(0.03, 0.09) }));
+function buildBg() {
+  const d = devicePixelRatio || 1;
+  bg = document.createElement('canvas'); bg.width = W * d; bg.height = H * d;
+  const b = bg.getContext('2d'); b.setTransform(d, 0, 0, d, 0, 0);
+  // smoky sky at the top (where the dragon sleeps), lighter in the middle so the kids see themselves
+  const g = b.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, 'rgba(40,14,8,.92)'); g.addColorStop(0.33, 'rgba(60,25,12,.6)');
+  g.addColorStop(0.6, 'rgba(40,22,14,.3)'); g.addColorStop(1, 'rgba(50,32,20,.5)');
+  b.fillStyle = g; b.fillRect(0, 0, W, H);
+  // rock walls on both sides
+  for (const side of [0, 1]) {
+    b.beginPath(); b.moveTo(side ? W : 0, 0);
+    for (const p of WALL) b.lineTo(side ? W - p.d * W : p.d * W, p.y * H * 0.62);
+    b.lineTo(side ? W : 0, H * 0.62); b.closePath();
+    b.fillStyle = 'rgba(70,52,44,.85)'; b.fill();
+    b.strokeStyle = 'rgba(150,120,95,.5)'; b.lineWidth = 3 * S; b.stroke();
+  }
+  // Triwizard banners hanging on the walls
+  const BAN = ['#9c1c1c', '#1d4f9c', '#d4a017', '#1c7a3a'];
+  for (let k = 0; k < 4; k++) {
+    const x = k < 2 ? (0.02 + k * 0.035) * W : W - (0.02 + (k - 2) * 0.035) * W - 0.025 * W, y = 0.3 * H, w = 0.025 * W;
+    b.fillStyle = BAN[k]; b.beginPath(); b.moveTo(x, y); b.lineTo(x + w, y); b.lineTo(x + w, y + 0.16 * H);
+    b.lineTo(x + w / 2, y + 0.13 * H); b.lineTo(x, y + 0.16 * H); b.closePath(); b.fill();
+    b.fillStyle = '#f7c84399'; b.fillRect(x, y, w, 4 * S);
+  }
+  // stone floor and rocks at the bottom
+  b.fillStyle = 'rgba(80,60,42,.55)'; b.fillRect(0, H * 0.92, W, H * 0.08);
+  for (const r of ROCKS) {
+    b.fillStyle = 'rgba(105,85,70,.75)';
+    b.beginPath(); b.ellipse(r.x * W, H * 0.935, r.w * W / 2, r.h * H, 0, Math.PI, 0); b.fill();
+  }
+}
+
+// ---------- draw: the dragon ----------
+function dragonPos(z) {
+  const [x0, x1] = zoneX(z), w = x1 - x0;
+  const u = Math.min(w * 0.55 / 260, 1.9 * S); // u = one dragon unit in pixels
+  return { x: (x0 + x1) / 2, y: 130 * S + 40 * u, u };
+}
+const GREEN = '#4f9a5a', DARK = '#356b40', BELLY = '#e8d58f', HORN = '#f3e2b3';
+
+function drawDragon(z, t) {
+  const { x, y, u } = dragonPos(z);
+  const sleeping = z.phase === 'sleep' && state !== 'end';
+  ctx.save();
+  ctx.translate(x, y);
+  if (z.phase === 'warn') ctx.translate(Math.sin(t * 70) * 2 * u, 0); // rumble shake
+  const breathe = sleeping ? Math.sin(t * 1.6) * 0.025 : 0;
+
+  // rocky nest she sleeps on
+  ctx.fillStyle = '#5e4a3e';
+  for (const [rx, ry, rw, rh] of [[-95, 62, 40, 20], [95, 62, 40, 20], [-50, 72, 45, 18], [50, 72, 45, 18], [0, 76, 50, 16]]) {
+    ctx.beginPath(); ctx.ellipse(rx * u, ry * u, rw * u, rh * u, 0, 0, 7); ctx.fill();
+  }
+  // tail with a spade tip
+  ctx.strokeStyle = GREEN; ctx.lineWidth = 16 * u; ctx.lineCap = 'round';
+  const wag = Math.sin(t * (sleeping ? 1 : 3)) * 8 * u;
+  ctx.beginPath(); ctx.moveTo(60 * u, 35 * u); ctx.quadraticCurveTo(140 * u, 55 * u, 125 * u + wag, -5 * u); ctx.stroke();
+  ctx.fillStyle = DARK; ctx.beginPath();
+  ctx.moveTo(125 * u + wag, -25 * u); ctx.lineTo(140 * u + wag, -2 * u); ctx.lineTo(125 * u + wag, 5 * u); ctx.lineTo(110 * u + wag, -2 * u);
+  ctx.closePath(); ctx.fill();
+
+  // wings: folded while asleep, spread wide when awake
+  const k = z.wing;
+  for (const side of [-1, 1]) {
+    ctx.save(); ctx.scale(side, 1);
+    const tx = (105 + 50 * k) * u, ty = (-55 - 45 * k) * u + Math.sin(t * 4) * 3 * u * k;
+    ctx.beginPath(); ctx.moveTo(40 * u, -20 * u);
+    ctx.quadraticCurveTo(70 * u, ty * 1.05, tx, ty);
+    const bx = 55 * u, by = 20 * u; // bottom of the wing
+    for (let s = 1; s <= 3; s++) { // scalloped edge
+      const ex = tx + (bx - tx) * s / 3, ey = ty + (by - ty) * s / 3;
+      const mx = tx + (bx - tx) * (s - 0.5) / 3 - 8 * u, my = ty + (by - ty) * (s - 0.5) / 3 - 2 * u;
+      ctx.quadraticCurveTo(mx - 6 * u, my + 6 * u, ex, ey);
+    }
+    ctx.closePath();
+    ctx.fillStyle = DARK; ctx.fill();
+    ctx.strokeStyle = '#2a5233'; ctx.lineWidth = 3 * u; ctx.stroke();
+    ctx.beginPath(); // wing bones
+    for (let s = 1; s <= 2; s++) { ctx.moveTo(42 * u, -18 * u); ctx.lineTo(tx + (bx - tx) * s / 3, ty + (by - ty) * s / 3); }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // body
+  ctx.save(); ctx.scale(1 + breathe, 1 + breathe);
+  ctx.fillStyle = GREEN; ctx.beginPath(); ctx.ellipse(0, 10 * u, 82 * u, 48 * u, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = BELLY; ctx.beginPath(); ctx.ellipse(0, 28 * u, 52 * u, 26 * u, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = '#f0a64a'; // back spikes
+  for (let s = -3; s <= 3; s++) {
+    if (s === 0) continue;
+    const sxp = s * 16 * u, top = 10 * u - 48 * u * Math.sqrt(1 - (sxp / (82 * u)) ** 2);
+    ctx.beginPath(); ctx.moveTo(sxp - 6 * u, top + 3 * u); ctx.lineTo(sxp, top - 10 * u); ctx.lineTo(sxp + 6 * u, top + 3 * u); ctx.fill();
+  }
+  ctx.restore();
+
+  // front paws
+  for (const side of [-1, 1]) {
+    ctx.fillStyle = GREEN; ctx.beginPath(); ctx.ellipse(side * 32 * u, 64 * u, 19 * u, 10 * u, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = HORN;
+    for (const c of [-9, 0, 9]) { ctx.beginPath(); ctx.arc(side * 32 * u + c * u, 72 * u, 2.6 * u, 0, 7); ctx.fill(); }
+  }
+
+  // head (lower and resting on the paws while asleep)
+  const hy = sleeping ? 30 * u : 22 * u + (z.roar > 0 ? -4 * u : 0);
+  ctx.save(); ctx.translate(0, hy);
+  if (z.phase === 'awake' && !z.roar) ctx.rotate(Math.sin(t * 1.8) * 0.08); // looking around
+  // horns
+  ctx.fillStyle = HORN;
+  for (const side of [-1, 1]) {
+    ctx.beginPath(); ctx.moveTo(side * 16 * u, -22 * u);
+    ctx.quadraticCurveTo(side * 30 * u, -38 * u, side * 40 * u, -52 * u);
+    ctx.quadraticCurveTo(side * 36 * u, -30 * u, side * 30 * u, -16 * u); ctx.closePath(); ctx.fill();
+  }
+  // ear frills
+  ctx.fillStyle = '#f0a64a';
+  for (const side of [-1, 1]) {
+    ctx.beginPath(); ctx.moveTo(side * 36 * u, -10 * u); ctx.lineTo(side * 56 * u, -18 * u); ctx.lineTo(side * 40 * u, 4 * u); ctx.fill();
+  }
+  ctx.fillStyle = GREEN; ctx.beginPath(); ctx.ellipse(0, 0, 42 * u, 33 * u, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = '#7cc47f'; ctx.beginPath(); ctx.ellipse(0, 22 * u, 28 * u, 17 * u, 0, 0, 7); ctx.fill(); // snout
+  ctx.fillStyle = '#24402a';
+  for (const side of [-1, 1]) { ctx.beginPath(); ctx.ellipse(side * 9 * u, 17 * u, 3.5 * u, 2.5 * u, 0, 0, 7); ctx.fill(); }
+  ctx.fillStyle = 'rgba(255,120,140,.45)'; // pink cheeks (friendly)
+  for (const side of [-1, 1]) { ctx.beginPath(); ctx.arc(side * 30 * u, 14 * u, 6 * u, 0, 7); ctx.fill(); }
+  // mouth
+  if (z.roar > 0) {
+    ctx.fillStyle = '#7a1f1f'; ctx.beginPath(); ctx.ellipse(0, 32 * u, 14 * u, 9 * u, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = '#ff8fa0'; ctx.beginPath(); ctx.ellipse(0, 36 * u, 7 * u, 4 * u, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = '#fff';
+    for (const side of [-1, 1]) { ctx.beginPath(); ctx.moveTo(side * 9 * u, 24 * u); ctx.lineTo(side * 6 * u, 29 * u); ctx.lineTo(side * 3 * u, 24 * u); ctx.fill(); }
+  } else {
+    ctx.strokeStyle = '#24402a'; ctx.lineWidth = 2.5 * u; ctx.lineCap = 'round';
+    ctx.beginPath();
+    if (z.phase === 'awake') { ctx.moveTo(-10 * u, 33 * u); ctx.quadraticCurveTo(0, 29 * u, 10 * u, 33 * u); } // grumpy
+    else { ctx.moveTo(-10 * u, 31 * u); ctx.quadraticCurveTo(0, 36 * u, 10 * u, 31 * u); } // sleepy smile
+    ctx.stroke();
+  }
+  // eyes: closed / fluttering / wide open and glowing
+  let open = 0;
+  if (z.phase === 'warn') open = Math.max(0, Math.sin(z.pt * 16)) * (0.3 + 0.4 * z.pt / z.dur);
+  if (z.phase === 'awake' || state === 'end') open = 1;
+  const look = Math.sin(t * 2.2) * 3.5 * u;
+  for (const side of [-1, 1]) {
+    const ex = side * 17 * u, ey = -6 * u;
+    if (open > 0.05) {
+      if (open > 0.9 && state !== 'end') { ctx.fillStyle = 'rgba(255,215,60,.28)'; ctx.beginPath(); ctx.arc(ex, ey, 16 * u, 0, 7); ctx.fill(); }
+      ctx.save(); ctx.beginPath(); ctx.ellipse(ex, ey, 10 * u, 10 * u * open, 0, 0, 7); ctx.fillStyle = '#fffbe6'; ctx.fill(); ctx.clip();
+      ctx.fillStyle = '#ffc928'; ctx.beginPath(); ctx.ellipse(ex + look, ey, 6.5 * u, 8.5 * u, 0, 0, 7); ctx.fill();
+      ctx.fillStyle = '#1a1a1a'; ctx.beginPath(); ctx.ellipse(ex + look, ey, 2 * u, 6.5 * u, 0, 0, 7); ctx.fill();
+      ctx.restore();
+      ctx.strokeStyle = '#24402a'; ctx.lineWidth = 2.5 * u;
+      ctx.beginPath(); ctx.ellipse(ex, ey, 10 * u, 10 * u * open, 0, 0, 7); ctx.stroke();
+      if (z.phase === 'awake') { // grumpy eyebrows
+        ctx.lineWidth = 4 * u; ctx.beginPath(); ctx.moveTo(ex - side * 11 * u, ey - 16 * u); ctx.lineTo(ex + side * 9 * u, ey - 11 * u); ctx.stroke();
+      }
+    } else { // closed sleepy eye with lashes
+      ctx.strokeStyle = '#24402a'; ctx.lineWidth = 3 * u; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.arc(ex, ey - 3 * u, 9 * u, 0.25, Math.PI - 0.25); ctx.stroke();
+      ctx.lineWidth = 2 * u; ctx.beginPath();
+      for (const l of [-5, 0, 5]) { ctx.moveTo(ex + l * u, ey + 5.5 * u); ctx.lineTo(ex + l * 1.3 * u, ey + 9 * u); }
+      ctx.stroke();
+    }
+  }
+  ctx.restore(); // head
+  ctx.restore();
+}
+
+function drawPuffs(z) {
+  for (const p of z.puffs) {
+    if (p.kind === 'z') {
+      const age = 2.2 - p.life;
+      ctx.globalAlpha = Math.min(1, p.life / 0.8); ctx.fillStyle = '#e8f4ff';
+      ctx.font = `800 ${(16 + age * 14) * S}px "Cinzel Decorative", Georgia, serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(p.big ? 'Z' : 'z', p.x, p.y);
+    } else if (p.kind === 'smoke') {
+      ctx.globalAlpha = Math.min(0.55, p.life / 1.4 * 0.7); ctx.fillStyle = '#cfcfcf';
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 7); ctx.fill();
+    } else { // fire puff: yellow -> orange -> grey smoke
+      const f = p.life / 0.75;
+      ctx.globalAlpha = Math.min(0.85, f + 0.1);
+      ctx.fillStyle = f > 0.65 ? '#ffe066' : f > 0.35 ? '#ff9a3c' : '#9a8a80';
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 7); ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ---------- draw: eggs ----------
+function eggPath(r) {
+  ctx.beginPath(); ctx.moveTo(0, -1.25 * r);
+  ctx.bezierCurveTo(0.7 * r, -1.25 * r, r, -0.1 * r, r, 0.3 * r);
+  ctx.bezierCurveTo(r, 0.85 * r, 0.55 * r, 1.05 * r, 0, 1.05 * r);
+  ctx.bezierCurveTo(-0.55 * r, 1.05 * r, -r, 0.85 * r, -r, 0.3 * r);
+  ctx.bezierCurveTo(-r, -0.1 * r, -0.7 * r, -1.25 * r, 0, -1.25 * r);
+}
+function drawEgg(e, z, t) {
+  const L = z.level, r = e.r;
+  const grow = Math.min(1, e.age / 0.3), fade = e.age > L.life ? Math.max(0, 1 - (e.age - L.life) / 0.4) : 1;
+  const sc = (0.3 + 0.7 * grow) * fade;
+  if (sc <= 0.01) return;
+  ctx.save(); ctx.translate(e.x, e.y);
+  ctx.globalAlpha = z.phase === 'sleep' ? 1 : 0.55; // dimmed while the dragon watches
+  ctx.fillStyle = 'rgba(0,0,0,.3)'; ctx.beginPath(); ctx.ellipse(0, r * 1.05 * sc, r * 0.9 * sc, r * 0.22 * sc, 0, 0, 7); ctx.fill();
+  ctx.scale(sc, sc);
+  ctx.fillStyle = e.shiny ? 'rgba(200,160,255,.25)' : 'rgba(255,215,80,.22)'; // soft glow without shadowBlur
+  ctx.beginPath(); ctx.arc(0, 0, r * 1.7, 0, 7); ctx.fill();
+  ctx.rotate(Math.sin(t * 3 + e.p) * 0.12);
+  const g = ctx.createRadialGradient(-r * 0.3, -r * 0.45, r * 0.1, 0, 0, r * 1.3);
+  if (e.shiny) { g.addColorStop(0, '#ffffff'); g.addColorStop(0.35, '#ffb3e6'); g.addColorStop(0.65, '#9be7ff'); g.addColorStop(1, '#8a5cff'); }
+  else { g.addColorStop(0, '#fff6c8'); g.addColorStop(0.45, '#f7c843'); g.addColorStop(1, '#a86f00'); }
+  eggPath(r); ctx.fillStyle = g; ctx.fill();
+  ctx.strokeStyle = e.shiny ? '#ffffffaa' : '#8a5a00aa'; ctx.lineWidth = 2 * S; ctx.stroke();
+  ctx.fillStyle = e.shiny ? 'rgba(255,255,255,.6)' : 'rgba(150,95,0,.45)'; // spots
+  for (const [px, py, pr] of [[-0.4, 0.2, 0.13], [0.35, -0.3, 0.1], [0.3, 0.5, 0.12], [-0.15, -0.65, 0.08]]) {
+    ctx.beginPath(); ctx.arc(px * r, py * r, pr * r, 0, 7); ctx.fill();
+  }
+  ctx.restore();
+  if (e.shiny) { // twinkling sparkles around a shiny egg
+    ctx.fillStyle = '#fff';
+    for (let k = 0; k < 3; k++) {
+      const a = t * 1.5 + k * 2.1 + e.p, d = r * 1.6 * sc, s = (4 + 3 * Math.sin(t * 6 + k)) * S;
+      ctx.save(); ctx.translate(e.x + Math.cos(a) * d, e.y + Math.sin(a) * d); ctx.rotate(Math.PI / 4);
+      ctx.fillRect(-s, -s / 4, s * 2, s / 2); ctx.fillRect(-s / 4, -s, s / 2, s * 2); ctx.restore();
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function starPath(R, r) {
+  ctx.beginPath();
+  for (let k = 0; k < 10; k++) { const a = k * Math.PI / 5 - Math.PI / 2, rr = k % 2 ? r : R; ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); }
+  ctx.closePath();
+}
+function pill(x, y, w, h) {
+  const r = h / 2;
+  ctx.beginPath(); ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y); ctx.arc(x + w - r, y + r, r, -Math.PI / 2, Math.PI / 2);
+  ctx.lineTo(x + r, y + h); ctx.arc(x + r, y + r, r, Math.PI / 2, Math.PI * 1.5); ctx.closePath();
+}
+function fitFont(text, size, maxW, weight = 800) {
+  ctx.font = `${weight} ${size}px "Cinzel Decorative", Georgia, serif`;
+  const w = ctx.measureText(text).width;
+  if (w > maxW) ctx.font = `${weight} ${size * maxW / w}px "Cinzel Decorative", Georgia, serif`;
+}
+
+// status bar at the top of each half + stillness meter
+function drawStatus(z, x0, x1, t) {
+  const cx = (x0 + x1) / 2, w = Math.min((x1 - x0) * 0.5, 420 * S), h = 50 * S, y = 14 * S;
+  const ST = {
+    sleep: ['Collect eggs! 🥚', '#2e9e48', '#eafff0'],
+    warn: ['Shh… freeze!', '#e0b416', '#2a1e00'],
+    awake: ['FREEZE! 🧊', '#d42a2a', '#fff'],
+  };
+  const [label, bgc, fg] = state === 'play' ? ST[z.phase] : ['Get ready…', '#555a', '#fff'];
+  pill(cx - w / 2, y, w, h); ctx.fillStyle = bgc; ctx.fill();
+  ctx.lineWidth = 3 * S; ctx.strokeStyle = 'rgba(255,255,255,.6)'; ctx.stroke();
+  ctx.fillStyle = fg; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  fitFont(label, 28 * S, w - 30 * S); ctx.fillText(label, cx, y + h / 2 + 2 * S);
+  if (state === 'play' && z.phase !== 'sleep') { // stillness meter
+    const mw = w * 0.85, mx = cx - mw / 2, my = y + h + 8 * S, mh = 14 * S;
+    const c = z.phase === 'warn' ? 1 : z.calm;
+    ctx.fillStyle = 'rgba(0,0,0,.55)'; pill(mx, my, mw, mh); ctx.fill();
+    if (c > 0.01) { ctx.fillStyle = c > 0.6 ? '#4fe36b' : c > 0.3 ? '#ffd23f' : '#ff5a3c'; pill(mx, my, Math.max(mh, mw * c), mh); ctx.fill(); }
+    ctx.font = `600 ${15 * S}px "Cinzel", Georgia, serif`; ctx.fillStyle = '#fff';
+    ctx.fillText(z.penalized ? 'You moved!' : 'Stillness 🧊', cx, my + mh + 12 * S);
+  }
+}
+
+function draw() {
+  const t = performance.now() / 1000;
+  // camera picture, mirrored, under the arena
+  ctx.fillStyle = '#1a0e0a'; ctx.fillRect(0, 0, W, H);
+  if (video.readyState >= 2) {
+    ctx.save(); ctx.globalAlpha = 0.5; ctx.translate(W, 0); ctx.scale(-1, 1);
+    ctx.drawImage(video, 0, 0, W, H); ctx.restore();
+  }
+  if (!bg) buildBg();
+  ctx.drawImage(bg, 0, 0, W, H);
+
+  const list = zones.length ? zones : [];
+  for (const z of list) {
+    const [x0, x1] = zoneX(z);
+    if (z.flash > 0) { ctx.fillStyle = `rgba(255,140,0,${z.flash * 0.45})`; ctx.fillRect(x0, 0, x1 - x0, H); }
+    if (state === 'play' && z.phase === 'awake' && !z.penalized) { // red frame = freeze time
+      ctx.strokeStyle = `rgba(255,60,60,${0.5 + 0.3 * Math.sin(t * 8)})`; ctx.lineWidth = 10 * S;
+      ctx.strokeRect(x0 + 5 * S, 5 * S, x1 - x0 - 10 * S, H - 10 * S);
+    }
+    drawDragon(z, t);
+    z.eggs.forEach(e => drawEgg(e, z, t));
+    drawPuffs(z);
+    if (state !== 'end') drawStatus(z, x0, x1, t);
+
+    // big message in the middle of her half
+    const cx = (x0 + x1) / 2, maxW = (x1 - x0) * 0.85;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    let big = null;
+    if (state === 'play') {
+      if (z.msg) big = [z.msg.t, '#ff9a3c', 1];
+      else if (z.phase === 'warn') big = ['Shh… FREEZE!', '#ffe14d', 1 + 0.08 * Math.sin(t * 12)];
+      else if (z.phase === 'awake') big = ['FREEZE!', '#ff4d4d', 1];
+    }
+    if (big) {
+      fitFont(big[0], 72 * S * big[2], maxW, 900);
+      ctx.lineWidth = 8 * S; ctx.strokeStyle = 'rgba(0,0,0,.6)'; ctx.strokeText(big[0], cx, H * 0.55);
+      ctx.fillStyle = big[1]; ctx.fillText(big[0], cx, H * 0.55);
+      if (z.phase === 'awake' && !z.penalized && !z.msg) {
+        fitFont("Don't move! Be a statue!", 30 * S, maxW, 700);
+        ctx.fillStyle = '#fff'; ctx.fillText("Don't move! Be a statue!", cx, H * 0.55 + 62 * S);
+      }
+    }
+
+    // wand = a glowing star at the right hand
+    for (const h of z.hands) {
+      ctx.save(); ctx.translate(h.x, h.y); ctx.rotate(t * 2.5);
+      ctx.shadowColor = z.color; ctx.shadowBlur = 20 * S; ctx.fillStyle = '#fff6c8';
+      starPath(HAND_R * S, HAND_R * S * .45); ctx.fill();
+      ctx.shadowBlur = 0; ctx.lineWidth = 3 * S; ctx.strokeStyle = z.color; ctx.stroke(); ctx.restore();
+    }
+
+    // score in the outer top corner of her half
+    const sxp = z.i === 0 ? x0 + 75 * S : x1 - 75 * S;
+    drawFace(z.face, sxp, 60 * S, 40 * S, z.color);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.font = `900 ${62 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.lineWidth = 6 * S; ctx.strokeStyle = 'rgba(0,0,0,.55)'; ctx.strokeText(z.score, sxp, 104 * S);
+    ctx.fillStyle = z.color; ctx.fillText(z.score, sxp, 104 * S);
+    ctx.font = `600 ${20 * S}px "Cinzel Decorative", Georgia, serif`; ctx.fillStyle = '#fff';
+    ctx.fillText(z.face.name, sxp, 172 * S);
+    ctx.fillText(z.level.name, sxp, 196 * S);
+  }
+  if (zones.length === 2) {
+    ctx.strokeStyle = 'rgba(247,200,67,.45)'; ctx.lineWidth = 4; ctx.setLineDash([20, 16]);
+    ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  for (const p of particles) {
+    ctx.globalAlpha = Math.min(1, Math.max(0, p.life / 0.6)); ctx.fillStyle = p.col;
+    ctx.beginPath(); ctx.arc(p.x, p.y, (p.r || 8) * S, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  for (const tx of texts) {
+    ctx.globalAlpha = Math.min(1, Math.max(0, tx.life / 0.6)); ctx.fillStyle = tx.col;
+    ctx.font = `800 ${(tx.big ? 60 : 50) * S}px "Cinzel Decorative", Georgia, serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.lineWidth = 6 * S; ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.strokeText(tx.t, tx.x, tx.y);
+    ctx.fillText(tx.t, tx.x, tx.y);
+  }
+  ctx.globalAlpha = 1;
+
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#fff';
+  if (state === 'play') {
+    ctx.font = `800 ${44 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillStyle = timeLeft < 10 ? '#ff6b6b' : '#fff';
+    ctx.fillText('⌛ ' + Math.ceil(timeLeft), W / 2, H - 40 * S);
+  }
+  if (state === 'count') {
+    const n = Math.ceil(countdown);
+    ctx.font = `900 ${220 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.lineWidth = 10 * S; ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.strokeText(n > 0 ? n : 'GO!', W / 2, H * 0.6);
+    ctx.fillText(n > 0 ? n : 'GO!', W / 2, H * 0.6);
+    ctx.font = `600 ${34 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillText('Shh… the dragon is sleeping. Get her eggs!', W / 2, H * 0.6 + 150 * S);
+  }
+}
+
+// ---------- main loop ----------
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  track(now); update(dt); draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+setup();
+window.dragonGame = { get state() { return state; }, get zones() { return zones; } }; // for automatic tests
+</script>
+</body>
+</html>

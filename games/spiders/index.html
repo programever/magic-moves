@@ -1,0 +1,734 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Escape the Spiders</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Cinzel:wght@600;800&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; height: 100%; background: #07110c; overflow: hidden;
+    font-family: "Cinzel", Georgia, serif; color: #fff; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; }
+  video { display: none; }
+  .overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 16px; background: rgba(6, 16, 12, .86); text-align: center; }
+  .hidden { display: none !important; }
+  h1 { font-family: "Cinzel Decorative", Georgia, serif; font-size: 56px; margin: 0; color: #f7c843;
+    text-shadow: 0 0 25px #ffb30088; }
+  #end { background: rgba(6, 16, 12, .55); gap: 10px; }
+  #end h1 { font-size: 44px; }
+  #trophy { display: flex; gap: 60px; }
+  .cup { position: relative; width: 170px; filter: drop-shadow(0 0 25px #ffd700);
+    animation: shine 1.2s ease-in-out infinite alternate; }
+  .cup svg { width: 170px; display: block; }
+  .cupface { position: absolute; left: 50%; top: 65px; transform: translate(-50%, -50%); }
+  .cupface img { width: 72px !important; height: 72px !important; }
+  @keyframes shine { from { transform: rotate(-4deg) scale(1); } to { transform: rotate(4deg) scale(1.07); } }
+  .row { display: flex; gap: 14px; align-items: center; font-size: 28px; }
+  .row span { width: 220px; text-align: right; }
+  button { font: inherit; font-size: 28px; padding: 12px 28px; border-radius: 40px; border: 3px solid #fff3;
+    background: #ffffff14; color: #fff; cursor: pointer; }
+  button.on { background: #f7c843; border-color: #f7c843; color: #2a1600; font-weight: 800; }
+  #start, .again { font-size: 40px; padding: 18px 60px; background: #7f0909; border-color: #f7c843;
+    color: #f7e7b0; font-weight: 800; }
+  .help { font-size: 22px; opacity: .8; max-width: 950px; line-height: 1.5; }
+  #status { position: fixed; bottom: 20px; left: 0; right: 0; text-align: center; font-size: 26px; }
+  #result { font-size: 28px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="menu" class="overlay">
+  <h1>🕸️ Escape the Spiders 🕸️</h1>
+  <div class="row"><span>Players</span>
+    <button data-players="1">1 player</button><button data-players="2">2 players</button></div>
+  <div class="row" id="lvl0"><span id="lvl0name">Left player</span>
+    <button data-side="0" data-level="easy">Easy</button><button data-side="0" data-level="hard">Hard</button></div>
+  <div class="row" id="lvl1"><span>Right player</span>
+    <button data-side="1" data-level="easy">Easy</button><button data-side="1" data-level="hard">Hard</button></div>
+  <button id="home" onclick="location.href='../../'">🏠 All games</button>
+  <button id="start">Start ▶</button>
+  <div class="help">Things on the ground: <b>JUMP ⬆</b> &nbsp; Things up high: <b>DUCK ⬇</b> &nbsp; Escape = 1 point.<br>
+    Stand tall and still during 3‑2‑1.<br>
+    Keys: Space start, Esc menu, F full screen, M music. Test: ↑/↓ left player, W/S right player</div>
+</div>
+
+<div id="end" class="overlay hidden">
+  <h1 id="endTitle"></h1>
+  <div id="trophy"></div>
+  <div id="result"></div>
+  <button class="again">Play again ▶</button>
+  <button id="toMenu">Menu</button>
+</div>
+
+<div id="status"></div>
+
+<script type="module">
+import { video, startTracking, track as trackPoses } from '../../shared/tracking.js';
+import { KIDS, drawKidFace, kidImg } from '../../shared/kids.js';
+
+const $ = s => document.querySelector(s);
+const canvas = $('#c'), ctx = canvas.getContext('2d');
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const seen = lm => lm && (lm.visibility ?? 1) > 0.5;
+
+let W, H, S, GY; // GY = ground line (where the feet stand)
+const bg = document.createElement('canvas'), bgx = bg.getContext('2d');
+function resize() {
+  const d = devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight; S = H / 900; GY = H * 0.86;
+  canvas.width = W * d; canvas.height = H * d; ctx.setTransform(d, 0, 0, d, 0, 0);
+  bg.width = W * d; bg.height = H * d; bgx.setTransform(d, 0, 0, d, 0, 0);
+  paintForest();
+}
+
+// ---------- settings ----------
+// warn = seconds the hint shows before the thing reaches her. speed = pixels per second.
+// duckThr / jumpThr = how far the nose must move, as a part of the screen height.
+// win = how early a jump/duck still counts. late = how late it still counts.
+const LEVELS = {
+  easy: { name: 'Easy', warn: 2.0, speed: 240, gap: [1.0, 1.8], duck: 0.75, single: true, lose: 0,
+    duckThr: 0.08, jumpThr: 0.035, win: 0.6, late: 0.25 },
+  hard: { name: 'Hard', warn: 1.25, speed: 430, gap: [0.5, 1.2], duck: 0.5, single: false, lose: 1,
+    duckThr: 0.12, jumpThr: 0.05, win: 0.25, late: 0.12, apart: 1.0 },
+};
+const ROUND = +new URLSearchParams(location.search).get('t') || 60; // ?t=10 = 10 second round
+const FACES = { easy: KIDS.player1, hard: KIDS.player2 }; // Easy = player 1, Hard = player 2
+const COLORS = ['#ff6b5b', '#6fb4ff'];
+const JUMP_TIME = 0.7, JUMP_H = 130;
+const settings = { players: 2, levels: ['easy', 'hard'] };
+
+function refreshMenu() {
+  document.querySelectorAll('[data-players]').forEach(b => b.classList.toggle('on', +b.dataset.players === settings.players));
+  document.querySelectorAll('[data-level]').forEach(b => b.classList.toggle('on', settings.levels[b.dataset.side] === b.dataset.level));
+  $('#lvl1').classList.toggle('hidden', settings.players === 1);
+  $('#lvl0name').textContent = settings.players === 1 ? 'Level' : 'Left player';
+}
+document.querySelectorAll('[data-players]').forEach(b => b.onclick = () => { settings.players = +b.dataset.players; refreshMenu(); });
+document.querySelectorAll('[data-level]').forEach(b => b.onclick = () => { settings.levels[b.dataset.side] = b.dataset.level; refreshMenu(); });
+refreshMenu();
+
+// ---------- sound ----------
+let ac;
+function tone(type, f1, f2, dur, vol, delay = 0) {
+  const t = ac.currentTime + delay, o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.connect(g); g.connect(ac.destination);
+  o.frequency.setValueAtTime(f1, t); o.frequency.exponentialRampToValueAtTime(f2, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function boing() { // a springy "boing": the pitch jumps up, then wobbles down
+  const t = ac.currentTime, o = ac.createOscillator(), g = ac.createGain(), lfo = ac.createOscillator(), lg = ac.createGain();
+  o.type = 'sine'; lfo.frequency.value = 16; lg.gain.value = 40;
+  lfo.connect(lg); lg.connect(o.frequency); o.connect(g); g.connect(ac.destination);
+  o.frequency.setValueAtTime(140, t); o.frequency.linearRampToValueAtTime(520, t + 0.07);
+  o.frequency.exponentialRampToValueAtTime(110, t + 0.55);
+  g.gain.setValueAtTime(0.45, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+  o.start(t); lfo.start(t); o.stop(t + 0.62); lfo.stop(t + 0.62);
+}
+function sfx(kind) {
+  if (!ac) return;
+  if (kind === 'yay') [784, 988, 1319].forEach((f, i) => tone('sine', f, f * 1.02, 0.2, 0.22, i * 0.07));
+  if (kind === 'hit') { boing(); [1400, 1700, 1400, 1800].forEach((f, i) => tone('triangle', f, f * 1.3, 0.07, 0.07, 0.35 + i * 0.09)); }
+  if (kind === 'warn') tone('sine', 660, 990, 0.12, 0.08);
+  if (kind === 'jump') tone('square', 300, 700, 0.15, 0.05);
+  if (kind === 'beep') tone('square', 600, 600, 0.12, 0.15);
+  if (kind === 'go') tone('square', 900, 900, 0.3, 0.15);
+  if (kind === 'end') // trumpet fanfare
+    [[523, 0, .15], [523, .18, .15], [523, .36, .15], [698, .54, .35], [880, .92, .2], [784, 1.12, .2], [1047, 1.32, .9]]
+      .forEach(([f, d, len]) => { tone('sawtooth', f, f, len, 0.12, d); tone('triangle', f, f, len, 0.25, d); });
+}
+
+// ---------- background music (made by code: a magic waltz in E minor, 3 beats per bar) ----------
+const MELODY = [76, 79, 83,  84, 83, 79,  81, 76, 72,  75, 78, 71,
+                83, 79, 76,  79, 84, 88,  84, 81, 76,  78, 75, 71];
+const ROOTS = [40, 36, 45, 47], STEP = 60 / 150;
+let musicOn = true, musicTimer = null, musicStep = 0, nextNote = 0, musicGain = null;
+const midi = m => 440 * 2 ** ((m - 69) / 12);
+function note(freq, t, dur, type, vol) {
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.frequency.value = freq; o.connect(g); g.connect(musicGain);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function playStep(i, t) {
+  const m = MELODY[i % 24], beat = i % 3, root = ROOTS[Math.floor(i / 3) % 4];
+  note(midi(m), t, 1.0, 'sine', 0.45); note(midi(m + 12), t, 0.35, 'sine', 0.15);
+  if (beat === 0) note(midi(root), t, STEP * 2.5, 'triangle', 0.6);
+  else note(midi(root + 12 + (beat === 1 ? 7 : 12)), t, STEP * 0.8, 'triangle', 0.25);
+}
+// Real music files from Iker (shared/music/, not in git). If a file can't play, the code waltz plays instead.
+const gameSong = new Audio('../../shared/music/game.mp3'), winnerSong = new Audio('../../shared/music/winner.mp3');
+gameSong.loop = true; gameSong.volume = 0.5; winnerSong.volume = 0.7;
+let winnerTimer = null;
+function startMusic() {
+  if (!musicOn) return;
+  stopWinnerSong();
+  gameSong.currentTime = 0;
+  gameSong.play().catch(startSynth);
+}
+function stopMusic() { gameSong.pause(); stopSynth(); }
+function playWinnerSong() {
+  if (!musicOn) return;
+  winnerTimer = setTimeout(() => { winnerSong.currentTime = 0; winnerSong.play().catch(() => {}); }, 2200);
+}
+function stopWinnerSong() { clearTimeout(winnerTimer); winnerSong.pause(); }
+function startSynth() {
+  if (!ac || !musicOn || musicTimer) return;
+  musicGain = ac.createGain(); musicGain.gain.value = 0.12; musicGain.connect(ac.destination);
+  musicStep = 0; nextNote = ac.currentTime + 0.05;
+  musicTimer = setInterval(() => {
+    while (nextNote < ac.currentTime + 0.12) { playStep(musicStep++, nextNote); nextNote += STEP; }
+  }, 25);
+}
+function stopSynth() {
+  if (!musicTimer) return;
+  clearInterval(musicTimer); musicTimer = null;
+  musicGain.gain.setTargetAtTime(0, ac.currentTime, 0.1);
+}
+
+// ---------- camera + body tracking ----------
+let poses = [];
+const status = t => $('#status').textContent = t;
+const sx = lm => (1 - lm.x) * W; // camera is mirrored
+
+// ---------- game state ----------
+let state = 'menu', timeLeft = 0, countdown = 0, gt = 0, zones = [], particles = [], texts = [];
+const keys = new Set();
+
+function makeZones() {
+  zones = [];
+  for (let i = 0; i < settings.players; i++) {
+    const level = LEVELS[settings.levels[i]];
+    zones.push({ i, level, face: FACES[settings.levels[i]], score: 0, escapes: 0, tickles: 0, color: COLORS[i],
+      things: [], spawnT: 0.6, lastArrive: -9,
+      base: null, seenT: 9, bodyX: null, cx: 0, duckBody: 0, duck: 0, jumpT: -1, wasUp: false,
+      lastJump: -9, lastDuck: -9, tickle: 0, cheer: 0 });
+  }
+  for (const z of zones) { const [x0, x1] = zoneX(z); z.cx = (x0 + x1) / 2; }
+}
+const zoneX = z => { const w = W / zones.length; return [z.i * w, (z.i + 1) * w]; };
+
+// Each body goes to the half where its nose is (the closest body wins).
+// Baseline = her standing height, measured during 3-2-1 and slowly updated later.
+function readBodies(dt) {
+  const found = zones.map(() => null);
+  for (const p of poses) {
+    if (!p[0] || !p[11] || !p[12]) continue;
+    const zi = zones.length === 1 ? 0 : (sx(p[0]) < W / 2 ? 0 : 1);
+    const width = Math.abs(p[11].x - p[12].x);
+    if (!found[zi] || width > found[zi].width) found[zi] = { p, width };
+  }
+  zones.forEach((z, i) => {
+    const f = found[i];
+    if (!f) { z.seenT += dt; if (z.seenT > 0.5) z.duckBody = Math.max(0, z.duckBody - dt * 3); return; }
+    z.seenT = 0;
+    const p = f.p, L = z.level;
+    const nose = p[0].y, sh = (p[11].y + p[12].y) / 2;
+    const hip = seen(p[23]) && seen(p[24]) ? (p[23].y + p[24].y) / 2 : null;
+    z.bodyX = (sx(p[11]) + sx(p[12])) / 2;
+    if (!z.base) z.base = { nose, sh, hip, torso: hip != null ? hip - sh : null };
+    const b = z.base;
+    if (b.hip == null && hip != null) { b.hip = hip; b.torso = hip - sh; }
+    const ema = (tau) => {
+      const k = 1 - Math.exp(-dt / tau);
+      b.nose += (nose - b.nose) * k; b.sh += (sh - b.sh) * k;
+      if (hip != null) { b.hip += (hip - b.hip) * k; b.torso += (hip - sh - b.torso) * k; }
+    };
+    // a small kid far from the camera moves less on screen, so the limits follow her body size
+    const scale = b.torso ? clamp(b.torso / 0.28, 0.6, 1.2) : 1;
+    const duckT = L.duckThr * scale, jumpT = L.jumpThr * scale;
+    const drop = nose - b.nose;
+    const rise = Math.max(b.nose - nose, b.sh - sh, hip != null && b.hip != null ? b.hip - hip : -1);
+    if (state === 'count') ema(0.4);
+    else if (state === 'play') { // stepping closer or further: follow slowly, faster when she stands normally
+      const normal = Math.abs(drop) < duckT * 0.4 && rise < jumpT * 0.5;
+      ema(normal ? 3 : 15);
+    }
+    const target = clamp(drop / duckT, 0, 1.2);
+    z.duckBody += (target - z.duckBody) * (1 - Math.exp(-dt / 0.06));
+    const up = rise > jumpT;
+    if (up && !z.wasUp && state !== 'count') startJump(z);
+    z.wasUp = up;
+  });
+}
+function startJump(z) {
+  if (z.jumpT >= 0 && z.jumpT < JUMP_TIME * 0.6) return; // already in the air
+  z.jumpT = 0; sfx('jump');
+}
+
+// test keys: Up/Down = left (or only) player, W/S = right player. Hold Down/S to duck.
+function readKeys() {
+  const z2 = zones[1] || zones[0];
+  return [keys.has('ArrowDown'), keys.has('KeyS')].map((d, i) => ({ z: i === 0 ? zones[0] : z2, d }));
+}
+
+// ---------- obstacles ----------
+// low things (must JUMP): log, spider on the ground. High things (must DUCK): web on a string, branch with a spider.
+function spawn(z) {
+  const L = z.level, high = Math.random() < L.duck;
+  const kind = high ? (Math.random() < 0.55 ? 'web' : 'branch') : (Math.random() < 0.5 ? 'log' : 'crawler');
+  const busy = z.things.find(t => !t.gone);
+  // 1 = comes from the right side. If one is still leaving, the new one follows it from the same side (no crossing).
+  const dir = busy ? busy.dir : Math.random() < 0.5 ? 1 : -1;
+  const t = { kind, high, dir, arrive: gt + L.warn, born: gt, x: 0, y: 0, hitV: null, done: false, spin: 0, p: rand(0, 6) };
+  z.things.push(t); z.lastArrive = t.arrive;
+  sfx('warn');
+}
+
+function judge(z, t) {
+  const L = z.level, last = t.high ? z.lastDuck : z.lastJump;
+  t.done = true;
+  if (last >= t.arrive - L.win) {
+    z.score += 1; z.escapes++; z.cheer = 0.6; sfx('yay');
+    burst(z.cx, GY - 150 * S, '#ffd84a', 16);
+    texts.push({ x: z.cx + 110 * S, y: GY - 200 * S, t: '+1', life: 0.9, col: '#ffd84a' });
+  } else {
+    z.score = Math.max(0, z.score - L.lose); z.tickles++; z.tickle = 1.1; sfx('hit');
+    t.hitV = { vx: -t.dir * 260 * S, vy: -620 * S, oy: 0 }; // boing: hops up and keeps going away
+    texts.push({ x: z.cx, y: GY - 290 * S, t: L.lose ? 'Tickle! −1' : 'Hee hee! Tickle!', life: 1.2, col: '#ff9de2', small: true });
+  }
+}
+function burst(x, y, col, n) {
+  for (let k = 0; k < n; k++) {
+    const a = rand(0, 6.28), v = rand(150, 380) * S;
+    particles.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0.6, col });
+  }
+}
+
+function startGame() {
+  if (!ac) ac = new AudioContext();
+  ac.resume();
+  stopMusic(); startMusic();
+  makeZones(); particles = []; texts = []; gt = 0;
+  $('#menu').classList.add('hidden'); $('#end').classList.add('hidden');
+  state = 'count'; countdown = 3.99; lastBeep = 4;
+}
+let lastBeep = 4;
+
+function endGame() {
+  state = 'end'; stopMusic(); sfx('end'); playWinnerSong();
+  const best = Math.max(...zones.map(z => z.score)), winners = zones.filter(z => z.score === best);
+  $('#endTitle').textContent = zones.length === 1 ? `${zones[0].face.name}, Forest Hero!`
+    : winners.length === 2 ? 'A tie! Two brave heroes!' : `${winners[0].face.name} escaped the spiders!`;
+  $('#trophy').innerHTML = winners.map(z => `<div class="cup">${CUP}<div class="cupface">${kidImg(z.face, '#fff6c8')}</div></div>`).join('');
+  $('#result').innerHTML = zones.map(z =>
+    `<span style="color:${z.color}">${kidImg(z.face, z.color)} ${z.face.name} (${z.level.name}): <b>${z.score}</b> point${z.score === 1 ? "" : "s"}` +
+    ` · ${z.tickles} tickle${z.tickles === 1 ? '' : 's'} 😆</span>`).join('<br>');
+  $('#end').classList.remove('hidden');
+}
+const CUP = `<svg viewBox="0 0 200 240"><defs><linearGradient id="gold" x1="0" x2="1">
+  <stop offset="0" stop-color="#8a5a00"/><stop offset=".35" stop-color="#fff1b0"/><stop offset=".6" stop-color="#f5c542"/>
+  <stop offset="1" stop-color="#8a5a00"/></linearGradient></defs>
+  <path d="M48 35 C5 35 5 105 62 112" fill="none" stroke="url(#gold)" stroke-width="12"/>
+  <path d="M152 35 C195 35 195 105 138 112" fill="none" stroke="url(#gold)" stroke-width="12"/>
+  <path d="M38 20 H162 C162 105 132 135 100 140 C68 135 38 105 38 20Z" fill="url(#gold)"/>
+  <rect x="90" y="138" width="20" height="38" fill="url(#gold)"/>
+  <path d="M62 176 H138 L150 202 H50Z" fill="url(#gold)"/>
+  <rect x="36" y="202" width="128" height="30" rx="5" fill="#7f0909" stroke="#f5c542" stroke-width="3"/>
+  <text x="100" y="223" text-anchor="middle" font-family="Cinzel, Georgia, serif" font-weight="800" font-size="17"
+    fill="#f7e7b0">⚡ CHAMPION ⚡</text></svg>`;
+function toMenu() {
+  state = 'menu'; zones = []; texts = []; particles = []; stopMusic(); stopWinnerSong();
+  $('#end').classList.add('hidden'); $('#menu').classList.remove('hidden');
+}
+
+$('#start').onclick = startGame;
+document.querySelector('.again').onclick = startGame;
+$('#toMenu').onclick = toMenu;
+addEventListener('keydown', e => {
+  if (e.code.startsWith('Arrow')) e.preventDefault();
+  if (e.repeat) return;
+  keys.add(e.code);
+  if (e.code === 'Space' && state !== 'play' && state !== 'count') startGame();
+  if (e.code === 'Escape') toMenu();
+  if (e.code === 'KeyH') location.href = '../../';
+  if (e.code === 'KeyM') { musicOn = !musicOn; if (musicOn && (state === 'play' || state === 'count')) startMusic(); else { stopMusic(); stopWinnerSong(); } }
+  if (e.code === 'KeyF') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+  if ((state === 'play' || state === 'count') && zones.length) {
+    if (e.code === 'ArrowUp') startJump(zones[0]);
+    if (e.code === 'KeyW') startJump(zones[1] || zones[0]);
+  }
+});
+addEventListener('keyup', e => keys.delete(e.code));
+addEventListener('blur', () => keys.clear());
+
+// ---------- update ----------
+function update(dt) {
+  if (state === 'count') {
+    countdown -= dt;
+    const n = Math.ceil(countdown);
+    if (n < lastBeep) { lastBeep = n; sfx(n > 0 ? 'beep' : 'go'); }
+    if (countdown <= 0) { state = 'play'; timeLeft = ROUND; }
+  } else if (state === 'play') {
+    timeLeft -= dt; gt += dt;
+    if (timeLeft <= 0) { timeLeft = 0; endGame(); }
+  }
+  if (zones.length) readBodies(dt);
+  const keyDuck = new Map();
+  if (zones.length) for (const { z, d } of readKeys()) if (d) keyDuck.set(z, true);
+
+  for (const z of zones) {
+    const L = z.level, [x0, x1] = zoneX(z), zw = x1 - x0;
+    // where she stands: follows her body, slowly, inside the middle of her half
+    const want = z.bodyX != null && z.seenT < 1 ? clamp(z.bodyX, x0 + zw * 0.3, x1 - zw * 0.3) : (x0 + x1) / 2;
+    z.cx += (want - z.cx) * (1 - Math.exp(-dt * 3));
+    // jump (a hop that lasts JUMP_TIME) and duck
+    if (z.jumpT >= 0) { z.jumpT += dt; if (z.jumpT > JUMP_TIME) z.jumpT = -1; }
+    const inAir = z.jumpT >= 0;
+    const duckWant = inAir ? 0 : Math.max(keyDuck.get(z) ? 1 : 0, Math.min(1, z.duckBody));
+    z.duck += (duckWant - z.duck) * (1 - Math.exp(-dt * 14));
+    if (state === 'play') {
+      if (inAir && z.jumpT > 0.05) z.lastJump = gt;
+      if (z.duck > 0.8 || z.duckBody >= 1) z.lastDuck = gt;
+    }
+    z.tickle = Math.max(0, z.tickle - dt); z.cheer = Math.max(0, z.cheer - dt);
+
+    // new obstacles
+    if (state === 'play') {
+      z.spawnT -= dt;
+      const busy = L.single ? z.things.some(t => !t.done) : gt + L.warn < z.lastArrive + L.apart;
+      if (z.spawnT <= 0 && !busy && timeLeft > L.warn + 0.4) { spawn(z); z.spawnT = rand(...L.gap) + (L.single ? 0 : L.warn * 0.3); }
+    }
+    for (const t of z.things) {
+      t.spin += dt;
+      const v = L.speed * S;
+      if (!t.hitV) t.x = z.cx + t.dir * v * (t.arrive - gt);
+      else { // bounced: hops up and away out of her half
+        t.x += t.hitV.vx * dt; t.hitV.oy += t.hitV.vy * dt; t.hitV.vy += 1400 * S * dt;
+      }
+      if (!t.done && state === 'play' && gt >= t.arrive + L.late) judge(z, t);
+      const off = t.x < x0 - 150 * S || t.x > x1 + 150 * S || (t.hitV && t.hitV.oy > H);
+      if (t.done && off) t.gone = true;
+    }
+    z.things = z.things.filter(t => !t.gone);
+  }
+  if (state === 'end' && Math.random() < 0.6) // golden confetti for the champion
+    particles.push({ x: rand(0, W), y: -10, vx: rand(-40, 40) * S, vy: rand(50, 150) * S, life: 3,
+      col: ['#f7c843', '#fff1b0', '#ff6b5b', '#ffffff'][Math.floor(rand(0, 4))], r: rand(3, 7), g: 20 });
+  for (const p of particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += (p.g ?? 500) * S * dt; p.life -= dt; }
+  particles = particles.filter(p => p.life > 0);
+  for (const t of texts) { t.y -= 70 * S * dt; t.life -= dt; }
+  texts = texts.filter(t => t.life > 0);
+}
+
+// ---------- forest background (painted once into a hidden canvas) ----------
+let seed = 1;
+const srand = (a, b) => { seed = (seed * 16807) % 2147483647; return a + (seed / 2147483647) * (b - a); };
+function paintForest() {
+  const c = bgx; seed = 7;
+  c.clearRect(0, 0, W, H);
+  const sky = c.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, 'rgba(4,10,22,.92)'); sky.addColorStop(.6, 'rgba(10,30,32,.6)'); sky.addColorStop(1, 'rgba(6,14,10,.7)');
+  c.fillStyle = sky; c.fillRect(0, 0, W, H);
+  // moon + soft moonbeams
+  const mx = W * 0.5, my = 85 * S;
+  c.save(); c.shadowColor = '#eaf4ff'; c.shadowBlur = 60 * S; c.fillStyle = '#f4f8ff';
+  c.beginPath(); c.arc(mx, my, 42 * S, 0, 7); c.fill(); c.restore();
+  c.fillStyle = 'rgba(190,215,255,.05)';
+  for (const [a, b] of [[-0.35, -0.15], [-0.05, 0.08], [0.2, 0.38]]) {
+    c.beginPath(); c.moveTo(mx - 20 * S, my); c.lineTo(mx + 20 * S, my);
+    c.lineTo(mx + Math.tan(b) * GY * 1.6, GY); c.lineTo(mx + Math.tan(a) * GY * 1.6, GY); c.fill();
+  }
+  // far trees (thin, misty)
+  for (let x = -20; x < W + 40; x += srand(50, 110) * S) {
+    const w = srand(12, 26) * S;
+    c.fillStyle = `rgba(18,40,44,${srand(.45, .7)})`;
+    c.fillRect(x, 0, w, GY);
+    c.beginPath(); c.moveTo(x - w * .8, GY); c.quadraticCurveTo(x + w / 2, GY - 30 * S, x + w * 1.8, GY); c.fill();
+  }
+  // canopy across the top, with a gap for the moon
+  c.fillStyle = 'rgba(6,18,14,.9)';
+  for (let x = -40; x < W + 60; x += srand(40, 80) * S) {
+    if (Math.abs(x - mx) < 120 * S) continue;
+    c.beginPath(); c.arc(x, srand(-10, 40) * S, srand(50, 95) * S, 0, 7); c.fill();
+  }
+  // big near trees at the sides (and at the middle line when two players)
+  const big = [0.015, 0.985];
+  for (const fx of big) {
+    const x = fx * W, w = 70 * S;
+    c.fillStyle = '#060c0a';
+    c.beginPath(); c.moveTo(x - w / 2, 0); c.lineTo(x + w / 2, 0); c.lineTo(x + w * .6, GY - 40 * S);
+    c.quadraticCurveTo(x + w * 1.3, GY, x + w * 1.6, GY + 10 * S); c.lineTo(x - w * 1.6, GY + 10 * S);
+    c.quadraticCurveTo(x - w * 1.3, GY, x - w * .6, GY - 40 * S); c.fill();
+    c.strokeStyle = 'rgba(80,120,110,.25)'; c.lineWidth = 3 * S;
+    for (let k = 0; k < 4; k++) { const yy = srand(.15, .7) * GY; c.beginPath(); c.moveTo(x - w * .2, yy); c.lineTo(x - w * .25, yy + 50 * S); c.stroke(); }
+  }
+  // ground with a moonlit path
+  const g = c.createLinearGradient(0, GY - 20 * S, 0, H);
+  g.addColorStop(0, '#1b2b1c'); g.addColorStop(1, '#070d08');
+  c.fillStyle = g; c.fillRect(0, GY - 6 * S, W, H - GY + 6 * S);
+  c.fillStyle = 'rgba(180,200,170,.10)'; c.fillRect(0, GY - 6 * S, W, 10 * S);
+  c.strokeStyle = 'rgba(70,120,70,.6)'; c.lineWidth = 2 * S;
+  for (let x = 0; x < W; x += srand(12, 30) * S) { // grass
+    c.beginPath(); c.moveTo(x, GY); c.lineTo(x + srand(-6, 6) * S, GY - srand(6, 16) * S); c.stroke();
+  }
+  // glowing mushrooms (glow painted once here, so it costs nothing per frame)
+  for (let k = 0; k < 9; k++) {
+    const x = srand(0.02, 0.98) * W, y = GY + srand(10, 60) * S, s = srand(10, 20) * S;
+    const col = ['#4ff3ff', '#ff7ae5', '#9dff6b'][k % 3];
+    const glow = c.createRadialGradient(x, y - s, 0, x, y - s, s * 5);
+    glow.addColorStop(0, col + '55'); glow.addColorStop(1, col + '00');
+    c.fillStyle = glow; c.fillRect(x - s * 5, y - s * 6, s * 10, s * 10);
+    c.fillStyle = '#e8e2c8'; c.fillRect(x - s * .25, y - s, s * .5, s);
+    c.fillStyle = col; c.beginPath(); c.ellipse(x, y - s, s, s * .6, 0, Math.PI, 0); c.fill();
+    c.fillStyle = '#fff'; c.beginPath(); c.arc(x - s * .4, y - s * 1.25, s * .13, 0, 7); c.arc(x + s * .3, y - s * 1.35, s * .1, 0, 7); c.fill();
+  }
+}
+addEventListener('resize', resize); resize();
+
+const flies = Array.from({ length: 34 }, () => ({ x: Math.random(), y: rand(0.2, 0.85), p: rand(0, 6.28), s: rand(0.3, 0.8) }));
+function drawFireflies(t) {
+  for (const f of flies) {
+    const x = f.x * W + Math.sin(t * f.s + f.p) * 40 * S, y = f.y * H + Math.cos(t * f.s * 1.3 + f.p) * 25 * S;
+    const a = 0.3 + 0.7 * Math.abs(Math.sin(t * 1.7 + f.p));
+    ctx.globalAlpha = a * 0.25; ctx.fillStyle = '#e6ff7a';
+    ctx.beginPath(); ctx.arc(x, y, 7 * S, 0, 7); ctx.fill();
+    ctx.globalAlpha = a; ctx.beginPath(); ctx.arc(x, y, 2.2 * S, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ---------- drawing the things ----------
+// A cute spider: round fuzzy body, big eyes, pink cheeks, a smile, 8 bendy legs.
+function drawSpider(x, y, r, t, mode, color = '#7a4fc0') {
+  ctx.save(); ctx.translate(x, y);
+  ctx.strokeStyle = '#3b2463'; ctx.lineCap = 'round'; ctx.lineWidth = r * 0.16;
+  for (const side of [-1, 1]) for (let k = 0; k < 4; k++) { // legs
+    const wig = Math.sin(t * (mode === 'walk' ? 16 : 4) + k * 1.6 + (side > 0 ? 1 : 0)) * (mode === 'walk' ? 0.3 : 0.12);
+    const a = -0.7 + k * 0.45 + wig;
+    const kx = side * r * (1.25 + 0.1 * k), ky = -r * 0.5 + k * r * 0.28;
+    const fx = side * r * (1.7 + 0.15 * Math.cos(a)), fy = mode === 'walk' ? r * 0.95 : r * (0.2 + k * 0.32);
+    ctx.beginPath(); ctx.moveTo(side * r * .5, -r * .05 + k * r * .12); ctx.quadraticCurveTo(kx, ky, fx, fy); ctx.stroke();
+  }
+  // fuzz
+  ctx.strokeStyle = color; ctx.lineWidth = r * 0.12;
+  ctx.beginPath();
+  for (let k = 0; k < 18; k++) { const a = k / 18 * 6.28; ctx.moveTo(Math.cos(a) * r * .9, Math.sin(a) * r * .9); ctx.lineTo(Math.cos(a) * r * 1.12, Math.sin(a) * r * 1.12); }
+  ctx.stroke();
+  ctx.fillStyle = color; ctx.beginPath(); ctx.arc(0, 0, r, 0, 7); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,.18)'; ctx.beginPath(); ctx.arc(-r * .3, -r * .4, r * .35, 0, 7); ctx.fill();
+  // eyes
+  const blink = (Math.sin(t * 1.3 + x * 0.01) > 0.97) ? 0.15 : 1;
+  for (const ex of [-0.38, 0.38]) {
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.ellipse(ex * r, -r * .12, r * .3, r * .34 * blink, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = '#1b1030'; ctx.beginPath(); ctx.arc(ex * r + r * .04, -r * .06, r * .17 * blink, 0, 7); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(ex * r + r * .1, -r * .14, r * .06, 0, 7); ctx.fill();
+  }
+  ctx.fillStyle = '#ff9fc8';
+  for (const ex of [-0.6, 0.6]) { ctx.beginPath(); ctx.ellipse(ex * r, r * .32, r * .14, r * .09, 0, 0, 7); ctx.fill(); }
+  ctx.strokeStyle = '#2a1640'; ctx.lineWidth = r * 0.09;
+  ctx.beginPath(); ctx.arc(0, r * .25, r * .25, 0.2, Math.PI - 0.2); ctx.stroke();
+  ctx.restore();
+}
+// how high each thing flies (center y), with the bounce when it tickled her
+const thingY = t => (t.high ? GY - 175 * S : t.kind === 'log' ? GY - 34 * S : GY - 30 * S) + (t.hitV ? t.hitV.oy : 0);
+function drawThing(t, now) {
+  const x = t.x, y = thingY(t);
+  if (t.kind === 'log') { // rolling log seen from its end: rings turn as it rolls
+    const r = 34 * S;
+    ctx.save(); ctx.translate(x, y); ctx.rotate(-t.dir * (x / r));
+    ctx.fillStyle = '#6b4220'; ctx.beginPath(); ctx.arc(0, 0, r, 0, 7); ctx.fill();
+    ctx.fillStyle = '#d9a86a'; ctx.beginPath(); ctx.arc(0, 0, r * .8, 0, 7); ctx.fill();
+    ctx.strokeStyle = '#a8743c'; ctx.lineWidth = 3 * S;
+    for (const k of [.55, .32]) { ctx.beginPath(); ctx.arc(0, 0, r * k, 0, 7); ctx.stroke(); }
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(r * .8, 0); ctx.stroke();
+    ctx.fillStyle = '#4fbf4f'; ctx.beginPath(); ctx.ellipse(0, -r * .95, r * .3, r * .14, 0, 0, 7); ctx.fill(); // moss
+    ctx.restore();
+  } else if (t.kind === 'crawler') { // spider scuttling on the ground
+    drawSpider(x, y - 4 * S + Math.abs(Math.sin(now * 14)) * 3 * S, 28 * S, now + t.p, 'walk', '#8a5bd6');
+  } else if (t.kind === 'web') { // spider web hanging on a string
+    const r = 62 * S, swing = Math.sin(now * 2 + t.p) * 0.08;
+    ctx.save(); ctx.translate(x, 0); ctx.rotate(swing);
+    ctx.strokeStyle = 'rgba(230,240,255,.8)'; ctx.lineWidth = 2 * S;
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, y - r); ctx.stroke();
+    ctx.translate(0, y);
+    ctx.fillStyle = 'rgba(200,220,255,.10)'; ctx.beginPath(); ctx.arc(0, 0, r, 0, 7); ctx.fill();
+    ctx.beginPath();
+    for (let k = 0; k < 8; k++) { const a = k * Math.PI / 4; ctx.moveTo(0, 0); ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r); }
+    for (const rr of [.35, .65, .95]) for (let k = 0; k <= 8; k++) { const a = k * Math.PI / 4; const p = [Math.cos(a) * r * rr, Math.sin(a) * r * rr]; k ? ctx.lineTo(...p) : ctx.moveTo(...p); }
+    ctx.stroke();
+    ctx.restore();
+    drawSpider(x - Math.sin(swing) * y, y * Math.cos(swing) + 4 * S, 24 * S, now + t.p, 'hang', '#5f8ad8');
+  } else { // branch with leaves swinging on a vine, a little spider sitting on it
+    const w = 130 * S, sw = Math.sin(now * 2.5 + t.p) * 0.12;
+    ctx.save(); ctx.translate(x, y); ctx.rotate(sw);
+    ctx.strokeStyle = '#3d6b2d'; ctx.lineWidth = 3 * S;
+    ctx.beginPath(); ctx.moveTo(-w * .35, 0); ctx.lineTo(-w * .35, -y - 20); ctx.moveTo(w * .35, 0); ctx.lineTo(w * .35, -y - 20); ctx.stroke();
+    ctx.strokeStyle = '#5a3a1e'; ctx.lineWidth = 16 * S;
+    ctx.beginPath(); ctx.moveTo(-w / 2, 6 * S); ctx.quadraticCurveTo(0, -8 * S, w / 2, 4 * S); ctx.stroke();
+    ctx.lineWidth = 7 * S; ctx.beginPath(); ctx.moveTo(w * .2, 0); ctx.lineTo(w * .32, 24 * S); ctx.stroke();
+    ctx.fillStyle = '#4caf50';
+    for (const [lx, ly] of [[-w * .45, 12], [-w * .15, 18], [w * .1, -14], [w * .4, 16], [w * .32, 28]]) {
+      ctx.beginPath(); ctx.ellipse(lx, ly * S, 13 * S, 7 * S, 0.5, 0, 7); ctx.fill();
+    }
+    ctx.restore();
+    drawSpider(x, y - 26 * S, 22 * S, now + t.p, 'sit', '#d0613f');
+  }
+}
+
+// ---------- drawing her character ----------
+function drawFallbackFace(x, y, r) {
+  ctx.fillStyle = '#f6d2b0'; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+  ctx.fillStyle = '#2a1a10';
+  ctx.beginPath(); ctx.arc(x - r * .33, y - r * .1, r * .1, 0, 7); ctx.arc(x + r * .33, y - r * .1, r * .1, 0, 7); ctx.fill();
+  ctx.strokeStyle = '#2a1a10'; ctx.lineWidth = r * .08;
+  ctx.beginPath(); ctx.arc(x, y + r * .15, r * .35, 0.3, Math.PI - 0.3); ctx.stroke();
+}
+function drawHero(z, now) {
+  const d = clamp(z.duck, 0, 1);
+  const lift = z.jumpT >= 0 ? Math.sin(Math.PI * z.jumpT / JUMP_TIME) * JUMP_H * S : 0;
+  const shake = z.tickle > 0 ? Math.sin(now * 55) * 10 * S * Math.min(1, z.tickle) : 0;
+  const x = z.cx + shake, feet = GY - lift;
+  // shadow on the ground
+  ctx.fillStyle = 'rgba(0,0,0,.4)';
+  ctx.beginPath(); ctx.ellipse(z.cx, GY + 4 * S, (55 - lift / S * 0.2) * S, 10 * S, 0, 0, 7); ctx.fill();
+  const bodyH = (100 - 48 * d) * S, shY = feet - bodyH, bw = (88 + 30 * d) * S, tw = (46 + 16 * d) * S;
+  ctx.save(); ctx.translate(x, 0);
+  if (z.tickle > 0) { ctx.translate(0, feet); ctx.rotate(Math.sin(now * 30) * 0.08); ctx.translate(0, -feet); }
+  // arms: up when jumping, around the head when ducking, down otherwise
+  ctx.strokeStyle = '#2b2140'; ctx.lineCap = 'round'; ctx.lineWidth = 16 * S;
+  for (const s of [-1, 1]) {
+    ctx.beginPath(); ctx.moveTo(s * tw * .45, shY + 12 * S);
+    if (lift > 10 * S) ctx.lineTo(s * 55 * S, shY - 45 * S);
+    else if (d > 0.4) ctx.lineTo(s * 26 * S, shY - 40 * S);
+    else ctx.lineTo(s * 50 * S, shY + 55 * S + (z.tickle > 0 ? Math.sin(now * 40 + s) * 15 * S : 0));
+    ctx.stroke();
+  }
+  // robe
+  ctx.fillStyle = '#2b2140';
+  ctx.beginPath(); ctx.moveTo(-tw / 2, shY); ctx.lineTo(tw / 2, shY); ctx.lineTo(bw / 2, feet); ctx.lineTo(-bw / 2, feet); ctx.fill();
+  ctx.strokeStyle = z.color; ctx.lineWidth = 5 * S;
+  ctx.beginPath(); ctx.moveTo(0, shY + 18 * S); ctx.lineTo(0, feet); ctx.stroke();
+  // scarf in her colour + gold
+  ctx.fillStyle = z.color; ctx.fillRect(-tw / 2 - 2 * S, shY - 4 * S, tw + 4 * S, 12 * S);
+  ctx.fillStyle = '#f7c843'; ctx.fillRect(-tw / 2 - 2 * S, shY + 2 * S, tw + 4 * S, 3 * S);
+  // shoes
+  ctx.fillStyle = '#111';
+  for (const s of [-1, 1]) { ctx.beginPath(); ctx.ellipse(s * bw * .28, feet, 16 * S, 8 * S, 0, 0, 7); ctx.fill(); }
+  // head = her face, with a little wizard hat
+  const r = 40 * S, hy = shY - r + 2 * S;
+  drawFallbackFace(0, hy, r);
+  drawKidFace(ctx, z.face, 0, hy, r, z.color);
+  ctx.fillStyle = '#3a2a6a';
+  ctx.beginPath(); ctx.moveTo(-r * .95, hy - r * .7); ctx.lineTo(r * .95, hy - r * .7);
+  ctx.lineTo(r * .25, hy - r * 2); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#f7c843'; ctx.font = `${r * .5}px serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('★', r * .1, hy - r * 1.1);
+  ctx.restore();
+  if (z.tickle > 0) { // giggle marks
+    ctx.fillStyle = '#ff9de2'; ctx.font = `800 ${26 * S}px "Cinzel", Georgia, serif`;
+    ctx.fillText('ha', x - 70 * S, hy - 10 * S + Math.sin(now * 20) * 5 * S);
+    ctx.fillText('ha!', x + 72 * S, hy - 25 * S + Math.cos(now * 20) * 5 * S);
+  }
+}
+
+// Big hint for the next thing: "JUMP ⬆" or "DUCK ⬇", a bar that runs out, and an arrow on the side it comes from.
+function drawHint(z, now) {
+  const next = z.things.filter(t => !t.done).sort((a, b) => a.arrive - b.arrive)[0];
+  if (!next) return;
+  const [x0, x1] = zoneX(z), L = z.level;
+  const left = clamp((next.arrive - gt) / L.warn, 0, 1);
+  const pulse = 1 + 0.06 * Math.sin(now * 10);
+  const col = next.high ? '#6fd3ff' : '#7dff8a', word = next.high ? 'DUCK ⬇' : 'JUMP ⬆';
+  const hx = (x0 + x1) / 2, hy = GY - 400 * S;
+  ctx.save(); ctx.translate(hx, hy); ctx.scale(pulse, pulse);
+  const w = 300 * S, h = 96 * S;
+  ctx.fillStyle = 'rgba(10,20,30,.75)'; ctx.strokeStyle = col; ctx.lineWidth = 5 * S;
+  ctx.beginPath(); ctx.roundRect(-w / 2, -h / 2, w, h, h / 2); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = col; ctx.font = `900 ${58 * S}px "Cinzel Decorative", Georgia, serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(word, 0, 4 * S);
+  ctx.fillStyle = 'rgba(255,255,255,.2)'; ctx.fillRect(-w * .4, h / 2 + 10 * S, w * .8, 10 * S);
+  ctx.fillStyle = col; ctx.fillRect(-w * .4, h / 2 + 10 * S, w * .8 * left, 10 * S);
+  ctx.restore();
+  // side arrow while the thing is still outside her half
+  const ax = next.dir > 0 ? x1 - 50 * S : x0 + 50 * S, ay = thingY(next);
+  if (next.x > x1 - 20 * S || next.x < x0 + 20 * S) {
+    ctx.save(); ctx.translate(ax + Math.sin(now * 12) * 8 * S, ay); ctx.scale(-next.dir, 1);
+    ctx.fillStyle = col; ctx.globalAlpha = 0.85;
+    ctx.beginPath(); ctx.moveTo(30 * S, 0); ctx.lineTo(-10 * S, -32 * S); ctx.lineTo(-10 * S, 32 * S); ctx.fill();
+    ctx.restore();
+    if (next.kind === 'log') {
+      ctx.font = `${44 * S}px serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('🪵', ax - next.dir * 60 * S, ay);
+    } else drawSpider(ax - next.dir * 60 * S, ay, 18 * S, now, 'sit');
+  }
+}
+
+function draw() {
+  const now = performance.now() / 1000;
+  ctx.fillStyle = '#07110c'; ctx.fillRect(0, 0, W, H);
+  if (video.readyState >= 2) { // the camera picture, faint, behind the forest
+    ctx.save(); ctx.globalAlpha = 0.4; ctx.translate(W, 0); ctx.scale(-1, 1);
+    ctx.drawImage(video, 0, 0, W, H); ctx.restore();
+  }
+  ctx.drawImage(bg, 0, 0, W, H);
+  drawFireflies(now);
+
+  for (const z of zones) {
+    const [x0, x1] = zoneX(z);
+    ctx.save(); ctx.beginPath(); ctx.rect(x0, 0, x1 - x0, H); ctx.clip();
+    for (const t of z.things) if (t.high) drawThing(t, now);
+    drawHero(z, now);
+    for (const t of z.things) if (!t.high) drawThing(t, now);
+    if (state === 'play') drawHint(z, now);
+    ctx.restore();
+    // score
+    ctx.fillStyle = z.color; ctx.font = `800 ${70 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.fillText(z.score, (x0 + x1) / 2 + 40 * S, 18 * S);
+    drawFallbackFace((x0 + x1) / 2 - 50 * S, 55 * S, 42 * S);
+    drawKidFace(ctx, z.face, (x0 + x1) / 2 - 50 * S, 55 * S, 42 * S, z.color);
+    ctx.font = `600 ${24 * S}px "Cinzel Decorative", Georgia, serif`; ctx.fillStyle = '#fff';
+    ctx.fillText(z.face.name + ' · ' + z.level.name, (x0 + x1) / 2, 100 * S);
+    if (z.seenT > 1.5 && state !== 'end') {
+      ctx.font = `600 ${20 * S}px "Cinzel", Georgia, serif`; ctx.fillStyle = 'rgba(255,255,255,.6)';
+      ctx.fillText('👀 Step in front of the camera', (x0 + x1) / 2, 132 * S);
+    }
+  }
+  if (zones.length === 2) {
+    ctx.strokeStyle = 'rgba(247,200,67,.45)'; ctx.lineWidth = 4; ctx.setLineDash([20, 16]);
+    ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  for (const p of particles) {
+    ctx.globalAlpha = Math.min(1, Math.max(0, p.life / 0.6)); ctx.fillStyle = p.col;
+    ctx.beginPath(); ctx.arc(p.x, p.y, (p.r || 7) * S, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  for (const t of texts) {
+    ctx.globalAlpha = Math.max(0, Math.min(1, t.life / 0.6)); ctx.fillStyle = t.col;
+    ctx.font = `800 ${(t.small ? 34 : 54) * S}px "Cinzel Decorative", Georgia, serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(t.t, t.x, t.y);
+  }
+  ctx.globalAlpha = 1;
+
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#fff';
+  if (state === 'play') {
+    ctx.font = `800 ${40 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillStyle = timeLeft < 10 ? '#ff6b6b' : '#fff';
+    ctx.fillText('⌛ ' + Math.ceil(timeLeft), W / 2, H - 36 * S);
+  }
+  if (state === 'count') {
+    const n = Math.ceil(countdown);
+    ctx.font = `900 ${240 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillText(n > 0 ? n : 'GO!', W / 2, H * 0.4);
+    ctx.font = `600 ${36 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillText('Stand tall and still!', W / 2, H * 0.4 + 160 * S);
+  }
+}
+
+// ---------- main loop ----------
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  poses = trackPoses(now); update(dt); draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+startTracking(status);
+window.spiderTest = () => ({ state, gt, zones: zones.map(z => ({ score: z.score, jumpT: z.jumpT, duck: z.duck, tickles: z.tickles, next: z.things.filter(t => !t.done).map(t => ({ high: t.high, in: t.arrive - gt })) })) });
+</script>
+</body>
+</html>
