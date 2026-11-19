@@ -68,6 +68,7 @@
 import { video, startTracking, track as trackPoses } from '../../shared/tracking.js';
 import { KIDS, drawKidFace, kidImg } from '../../shared/kids.js';
 import { recStart, recStop, recCancel } from '../../shared/recorder.js';
+import { look, nextLook, drawCameraOver, setupLookMenu } from '../../shared/look.js';
 
 const $ = s => document.querySelector(s);
 const canvas = $('#c'), ctx = canvas.getContext('2d');
@@ -107,6 +108,7 @@ const OWL_KINDS = {
   grey:  { body: '#8a8d98', wing: '#6f727d', belly: '#dcdee5', disc: '#c3c5ce', eye: '#ffcc33', beak: '#e8b34a', tufts: true, spots: false },
 };
 
+const markLook = setupLookMenu(); // Camera Dim / Normal / Bright row in the menu (shared/look.js)
 function refreshMenu() {
   document.querySelectorAll('[data-players]').forEach(b => b.classList.toggle('on', +b.dataset.players === settings.players));
   document.querySelectorAll('[data-level]').forEach(b => b.classList.toggle('on', settings.levels[b.dataset.side] === b.dataset.level));
@@ -331,6 +333,7 @@ addEventListener('keydown', e => {
   if (e.code === 'Space' && state !== 'play' && state !== 'count') startGame();
   if (e.code === 'Escape') toMenu();
   if (e.code === 'KeyH') location.href = '../../';
+  if (e.code === 'KeyC') { const l = nextLook(); markLook && markLook(); status('📷 Camera: ' + l.name); setTimeout(() => status(''), 1500); }
   if (e.code === 'KeyM') { musicOn = !musicOn; if (musicOn && (state === 'play' || state === 'count')) startMusic(); else { stopMusic(); stopWinnerSong(); } }
   if (e.code === 'KeyF') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
 });
@@ -645,6 +648,7 @@ function draw() {
     ctx.save(); ctx.translate(W, 0); ctx.scale(-1, 1); ctx.drawImage(video, 0, 0, W, H); ctx.restore();
   }
   ctx.globalAlpha = cam ? 0.72 : 1; ctx.drawImage(bg, 0, 0, W, H); ctx.globalAlpha = 1;
+  drawCameraOver(ctx, video, W, H); // Camera setting: kids clearer
   ctx.fillStyle = 'rgba(255,235,180,.5)';
   for (const m of motes) { ctx.beginPath(); ctx.arc(m.x % W, m.y, m.r * S, 0, 7); ctx.fill(); }
 

@@ -47,11 +47,13 @@
   <div class="row" id="lvl1"><span>Right player</span>
     <button data-side="1" data-level="easy">Easy</button><button data-side="1" data-level="hard">Hard</button></div>
   <button id="home" onclick="location.href='../../'">🏠 All games</button>
+  <div class="row"><span>Camera</span>
+    <button data-look="dim">Dim</button><button data-look="normal">Normal</button><button data-look="bright">Bright</button></div>
   <button id="start">Start ▶</button>
   <div class="help">Your right hand is your magic wand ✨ Catch the Golden Snitch!<br>
     Snitch = 1 point. &nbsp; Snitch with your face = 5 points.<br>
     Black Bludger ball (Hard only) = minus 3. Don't touch it!<br>
-    Keys: Space = start, Esc = back to menu, F = full screen, M = music on/off</div>
+    Keys: C = camera Dim/Normal/Bright, Space = start, Esc = back to menu, F = full screen, M = music on/off</div>
 </div>
 
 <div id="end" class="overlay hidden">
@@ -68,6 +70,7 @@
 import { video, startTracking, track as trackPoses } from '../../shared/tracking.js';
 import { KIDS, drawKidFace, kidImg } from '../../shared/kids.js';
 import { recStart, recStop, recCancel } from '../../shared/recorder.js';
+import { LOOKS, look, getLookName, setLookName, nextLook } from '../../shared/look.js';
 
 const $ = s => document.querySelector(s);
 const canvas = $('#c'), ctx = canvas.getContext('2d');
@@ -97,7 +100,9 @@ function refreshMenu() {
   document.querySelectorAll('[data-level]').forEach(b => b.classList.toggle('on', settings.levels[b.dataset.side] === b.dataset.level));
   $('#lvl1').classList.toggle('hidden', settings.players === 1);
   $('#lvl0name').textContent = settings.players === 1 ? 'Level' : 'Left player';
+  document.querySelectorAll('[data-look]').forEach(b => b.classList.toggle('on', b.dataset.look === getLookName()));
 }
+document.querySelectorAll('[data-look]').forEach(b => b.onclick = () => { setLookName(b.dataset.look); refreshMenu(); });
 document.querySelectorAll('[data-players]').forEach(b => b.onclick = () => { settings.players = +b.dataset.players; refreshMenu(); });
 document.querySelectorAll('[data-level]').forEach(b => b.onclick = () => { settings.levels[b.dataset.side] = b.dataset.level; refreshMenu(); });
 refreshMenu();
@@ -278,6 +283,7 @@ addEventListener('keydown', e => {
   if (e.code === 'Space' && state !== 'play' && state !== 'count') startGame();
   if (e.code === 'Escape') toMenu();
   if (e.code === 'KeyH') location.href = '../../';
+  if (e.code === 'KeyC') { const l = nextLook(); refreshMenu(); texts.push({ x: W / 2, y: H * 0.45, t: '📷 Camera: ' + l.name, life: 1.2, col: '#fff' }); }
   if (e.code === 'KeyM') { musicOn = !musicOn; if (musicOn && (state === 'play' || state === 'count')) startMusic(); else { stopMusic(); stopWinnerSong(); } }
   if (e.code === 'KeyF') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
 });
@@ -390,9 +396,9 @@ const stars = Array.from({ length: 140 }, () => ({ x: Math.random(), y: Math.ran
 // castle towers: x, height, width (parts of the screen); the middle stays open so kids can see themselves
 const TOWERS = [[.04, .2, .05], [.11, .3, .04], [.19, .16, .06], [.28, .24, .035], [.68, .22, .04], [.76, .33, .05], [.85, .17, .06], [.94, .26, .04]];
 function drawSky() {
-  const t = performance.now() / 1000;
+  const t = performance.now() / 1000, k = look().bg; // k = background strength (camera setting)
   const sky = ctx.createLinearGradient(0, 0, 0, H);
-  sky.addColorStop(0, 'rgba(8,5,35,.88)'); sky.addColorStop(.6, 'rgba(35,15,70,.5)'); sky.addColorStop(1, 'rgba(20,10,30,.35)');
+  sky.addColorStop(0, `rgba(8,5,35,${.88 * k})`); sky.addColorStop(.6, `rgba(35,15,70,${.5 * k})`); sky.addColorStop(1, `rgba(20,10,30,${.35 * k})`);
   ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H);
   ctx.fillStyle = '#fff';
   for (const st of stars) {
@@ -402,7 +408,7 @@ function drawSky() {
   ctx.globalAlpha = 1;
   ctx.save(); ctx.shadowColor = '#fff8dc'; ctx.shadowBlur = 50 * S; ctx.fillStyle = '#fff8dc';
   ctx.beginPath(); ctx.arc(W * .5, 90 * S, 40 * S, 0, 7); ctx.fill(); ctx.restore();
-  ctx.fillStyle = 'rgba(8,4,20,.65)';
+  ctx.fillStyle = `rgba(8,4,20,${.65 * (0.4 + 0.6 * k)})`; // castle stays a little visible
   ctx.fillRect(0, H * .93, W, H * .07);
   for (const [fx, fh, fw] of TOWERS) {
     const x = fx * W, w = fw * W, h = fh * H;
@@ -422,7 +428,7 @@ function draw() {
   // camera picture, mirrored, under a night sky
   ctx.fillStyle = '#120a24'; ctx.fillRect(0, 0, W, H);
   if (video.readyState >= 2) {
-    ctx.save(); ctx.globalAlpha = 0.5; ctx.translate(W, 0); ctx.scale(-1, 1);
+    ctx.save(); ctx.globalAlpha = look().cam; ctx.translate(W, 0); ctx.scale(-1, 1);
     ctx.drawImage(video, 0, 0, W, H); ctx.restore();
   }
   drawSky();

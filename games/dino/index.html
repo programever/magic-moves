@@ -70,6 +70,7 @@
 import { video, startTracking, track as trackPoses } from '../../shared/tracking.js';
 import { KIDS, drawKidFace, kidImg } from '../../shared/kids.js';
 import { recStart, recStop, recCancel } from '../../shared/recorder.js';
+import { look, nextLook, drawCameraOver, setupLookMenu } from '../../shared/look.js';
 
 const $ = s => document.querySelector(s);
 const canvas = $('#c'), ctx = canvas.getContext('2d');
@@ -106,6 +107,7 @@ const LOOK = [{ scarf: '#c8202a', stripe: '#f2c14e' }, { scarf: '#1f5fc0', strip
 const JUMP_H = 150, TRIP = 1.0;                 // jump height (lane units), trip time (seconds)
 const settings = { players: 2, levels: ['easy', 'hard'] };
 
+const markLook = setupLookMenu(); // Camera Dim / Normal / Bright row in the menu (shared/look.js)
 function refreshMenu() {
   document.querySelectorAll('[data-players]').forEach(b => b.classList.toggle('on', +b.dataset.players === settings.players));
   document.querySelectorAll('[data-level]').forEach(b => b.classList.toggle('on', settings.levels[b.dataset.side] === b.dataset.level));
@@ -369,6 +371,7 @@ addEventListener('keydown', e => {
   if (e.code === 'Space' && state !== 'play' && state !== 'count') startGame();
   if (e.code === 'Escape') toMenu();
   if (e.code === 'KeyH') location.href = '../../';
+  if (e.code === 'KeyC') { const l = nextLook(); markLook && markLook(); status('📷 Camera: ' + l.name); setTimeout(() => status(''), 1500); }
   if (e.code === 'KeyM') { musicOn = !musicOn; if (musicOn && (state === 'play' || state === 'count')) startMusic(); else { stopMusic(); stopWinnerSong(); } }
   if (e.code === 'KeyF') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
   if (state === 'play' && zones.length) {
@@ -1009,7 +1012,8 @@ function draw() {
   }
   // small camera picture in the top-right corner, so the kids see they are tracked
   if (video.readyState >= 2 && zones.length) {
-    const cw = 220 * S, ch = cw * 9 / 16, cx = W - cw - 14 * S, cy = 14 * S;
+    const cw = look().inset * S, ch = cw * 9 / 16, // Camera setting: window size
+      cx = W - cw - 14 * S, cy = 14 * S;
     ctx.save(); ctx.beginPath(); ctx.roundRect(cx, cy, cw, ch, 12 * S); ctx.clip();
     ctx.translate(cx + cw, cy); ctx.scale(-1, 1); ctx.drawImage(video, 0, 0, cw, ch); ctx.restore();
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 3 * S; ctx.beginPath(); ctx.roundRect(cx, cy, cw, ch, 12 * S); ctx.stroke();

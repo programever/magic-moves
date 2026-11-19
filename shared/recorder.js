@@ -1,41 +1,77 @@
-// Records each round (from 5 s after the start): the CAMERA picture + the MICROPHONE sound of the room (no game picture, no game music).
+// Records each round (from 5 s after the start) as one video:
+//   picture = the GAME SCREEN (it already shows the camera; the Camera Dim/Normal/Bright setting makes the kids clearer)
+//   sound   = the MICROPHONE (the room: voices, laughing) mixed with the game sounds and music.
 // The video lives only in memory: on the end screen the kids can "Replay" or "Save video" (goes to Downloads).
 // If nobody saves it, it is thrown away when the next round starts, the menu opens or the page closes.
 //
-// Use in a game:  recStart() when the round starts, recStop() when it ends, recCancel() when going back to the menu.
-// Games call recStart(canvas, ac, [gameSong, winnerSong]); only the songs are used (paused during a replay).
+// Use in a game:  recStart(canvas, ac, [gameSong, winnerSong]) when the round starts (right after ac.resume()),
+//                 recStop() when it ends, recCancel() when going back to the menu.
 import { video } from './tracking.js';
 
-const SKIP = 5000; // do not record the first 5 seconds of a round (the 3-2-1 countdown and getting ready)
+const SKIP = 5000;                     // do not record the first 5 seconds of a round (countdown, getting ready)
+const VW = 1280, VH = 720, FPS = 24;   // video size
 let rec = null, chunks = [], url = null, mic = null, micAsked = false, songs = [], waitTimer = null, round = 0;
+let comp = null, cctx = null, drawTimer = null, game = null;
+let recCtx = null, recDest = null, micSrc = null;
+const hooked = new WeakSet();
 
-// Ask for the microphone once (Chrome remembers "Allow" for this page). No microphone = video without sound.
+// Ask for the microphone once (Chrome remembers "Allow" for this page). No microphone = only the game sound.
 async function getMic() {
   if (mic || micAsked) return mic;
   micAsked = true;
   try { mic = await navigator.mediaDevices.getUserMedia({ audio: true, video: false }); }
-  catch (e) { console.warn('no microphone, recording without sound', e); }
+  catch (e) { console.warn('no microphone, recording without room sound', e); }
   return mic;
 }
 getMic(); // ask early, on page load, not in the middle of the countdown
 
-export async function recStart(_canvas, _ac, songList = []) {
+// Every game sound that goes to the speakers also goes to the recording.
+const connect = AudioNode.prototype.connect;
+AudioNode.prototype.connect = function (target, ...rest) {
+  const r = connect.call(this, target, ...rest);
+  if (recDest && this.context === recCtx && target === recCtx.destination) connect.call(this, recDest);
+  return r;
+};
+
+function setupSound(ac, m) {
+  if (recCtx !== ac) { recCtx = ac; recDest = ac.createMediaStreamDestination(); micSrc = null; }
+  for (const el of songs) { // the mp3 songs: send them through the game's audio so they are recorded too
+    if (hooked.has(el)) continue;
+    hooked.add(el);
+    try { ac.createMediaElementSource(el).connect(ac.destination); } catch (e) { console.warn('song not recorded', e); }
+  }
+  if (m && !micSrc) { micSrc = ac.createMediaStreamSource(m); connect.call(micSrc, recDest); } // recording only, not the speakers
+}
+
+function drawFrame() { // copy the game screen into the video (a fixed 1280 x 720, so the Intel Mac stays fast)
+  if (!game || !game.width) return;
+  const h = Math.round(VW * game.height / game.width);
+  if (comp.height !== h) comp.height = h;
+  cctx.drawImage(game, 0, 0, VW, h);
+}
+
+export async function recStart(canvas, ac, songList = []) {
   recCancel();
-  songs = songList;
+  songs = songList; game = canvas;
   if (!window.MediaRecorder) return;
   const cam = video.srcObject;
   if (!cam || !cam.getVideoTracks().length) return; // camera not ready: no recording this round
   const me = round, t0 = performance.now();
   const m = await getMic();
   if (me !== round) return; // cancelled while waiting
-  waitTimer = setTimeout(() => { if (me === round) begin(cam, m); }, Math.max(0, SKIP - (performance.now() - t0)));
+  try { if (ac) setupSound(ac, m); } catch (e) { console.warn('sound not recorded', e); }
+  waitTimer = setTimeout(() => { if (me === round) begin(); }, Math.max(0, SKIP - (performance.now() - t0)));
 }
 
-function begin(cam, m) {
+function begin() {
   try {
-    const stream = new MediaStream([...cam.getVideoTracks(), ...(m ? m.getAudioTracks() : [])]);
+    if (!comp) { comp = document.createElement('canvas'); comp.width = VW; comp.height = VH; cctx = comp.getContext('2d'); }
+    drawFrame();
+    drawTimer = setInterval(drawFrame, 1000 / FPS);
+    const stream = comp.captureStream(FPS);
+    if (recDest) recDest.stream.getAudioTracks().forEach(t => stream.addTrack(t));
     const type = ['video/webm;codecs=vp8,opus', 'video/webm'].find(t => MediaRecorder.isTypeSupported(t));
-    const r = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 2_500_000 });
+    const r = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 3_000_000 });
     chunks = [];
     r.ondataavailable = e => e.data.size && chunks.push(e.data);
     r.start(1000);
@@ -46,18 +82,22 @@ function begin(cam, m) {
 export function recStop() {
   clearTimeout(waitTimer);
   const r = rec;
-  if (!r || r.state === 'inactive') return;
-  r.onstop = () => {
-    if (rec !== r) return; // a newer round started meanwhile
-    url = URL.createObjectURL(new Blob(chunks, { type: 'video/webm' }));
-    chunks = [];
-    showButtons(true);
-  };
-  r.stop();
+  if (!r || r.state === 'inactive') { clearInterval(drawTimer); return; }
+  setTimeout(() => { // keep 1 more second so the last moment and the end sound are in the video
+    clearInterval(drawTimer);
+    if (r.state === 'inactive') return;
+    r.onstop = () => {
+      if (rec !== r) return; // a newer round started meanwhile
+      url = URL.createObjectURL(new Blob(chunks, { type: 'video/webm' }));
+      chunks = [];
+      showButtons(true);
+    };
+    r.stop();
+  }, 1000);
 }
 
 export function recCancel() { // throw the video away
-  clearTimeout(waitTimer); round++;
+  clearTimeout(waitTimer); clearInterval(drawTimer); round++;
   if (rec && rec.state !== 'inactive') { rec.onstop = null; rec.stop(); }
   rec = null; chunks = [];
   if (url) { URL.revokeObjectURL(url); url = null; }
@@ -89,7 +129,7 @@ style.textContent = `
   #replay { position: fixed; inset: 0; z-index: 1000; background: #000; display: none;
     flex-direction: column; align-items: center; justify-content: center; gap: 14px; }
   #replay video { display: block !important; width: 92vw; height: 80vh; object-fit: contain; background: #111; border-radius: 14px;
-    transform: scaleX(-1); } /* mirrored, like in the game */
+  }
   #replay .bar { display: flex; gap: 14px; }
   #replay button { font: inherit; font-size: 24px; padding: 10px 26px; border-radius: 40px; border: 3px solid #fff5;
     background: #ffffff22; color: #fff; cursor: pointer; }`;

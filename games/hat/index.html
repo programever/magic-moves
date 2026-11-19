@@ -68,6 +68,7 @@
 import { video, startTracking, track as trackPoses } from '../../shared/tracking.js';
 import { KIDS, drawKidFace, kidImg } from '../../shared/kids.js';
 import { recStart, recStop, recCancel } from '../../shared/recorder.js';
+import { look, nextLook, drawCameraOver, setupLookMenu } from '../../shared/look.js';
 
 const $ = s => document.querySelector(s);
 const canvas = $('#c'), ctx = canvas.getContext('2d');
@@ -142,6 +143,7 @@ const COLORS = ['#ff6b5b', '#6fb4ff'];                   // Gryffindor red, Rave
 const HOUSE = [{ main: '#9c1a1a', trim: '#f2c14e' }, { main: '#1c3f8f', trim: '#c9b27c' }];
 const settings = { players: 2, levels: ['easy', 'hard'] };
 
+const markLook = setupLookMenu(); // Camera Dim / Normal / Bright row in the menu (shared/look.js)
 function refreshMenu() {
   document.querySelectorAll('[data-players]').forEach(b => b.classList.toggle('on', +b.dataset.players === settings.players));
   document.querySelectorAll('[data-level]').forEach(b => b.classList.toggle('on', settings.levels[b.dataset.side] === b.dataset.level));
@@ -370,6 +372,7 @@ addEventListener('keydown', e => {
   if (e.code === 'Space' && state !== 'play' && state !== 'count') startGame();
   if (e.code === 'Escape') toMenu();
   if (e.code === 'KeyH') location.href = '../../';
+  if (e.code === 'KeyC') { const l = nextLook(); markLook && markLook(); status('📷 Camera: ' + l.name); setTimeout(() => status(''), 1500); }
   if (e.code === 'KeyM') { musicOn = !musicOn; if (musicOn && (state === 'play' || state === 'count')) startMusic(); else { stopMusic(); stopWinnerSong(); } }
   if (e.code === 'KeyF') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
   // test keys: pretend a player does pose N for 1.5 seconds
@@ -675,6 +678,7 @@ function draw() {
   }
   ctx.drawImage(bg, 0, 0, W, H);
   drawCandles(t);
+  drawCameraOver(ctx, video, W, H); // Camera setting: kids clearer
 
   for (const z of zones) { // her house banner: flaps when she scores
     const [x0, x1] = zoneX(z), right = zones.length === 2 && z.i === 1;
