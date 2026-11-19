@@ -1,0 +1,696 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Broom Race</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Cinzel:wght@600;800&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; height: 100%; background: #120a24; overflow: hidden;
+    font-family: "Cinzel", Georgia, serif; color: #fff; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; }
+  video { display: none; }
+  .overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 22px; background: rgba(18, 10, 36, .86); text-align: center; }
+  .hidden { display: none !important; }
+  h1 { font-family: "Cinzel Decorative", Georgia, serif; font-size: 72px; margin: 0; color: #f7c843;
+    text-shadow: 0 0 25px #ffb30088; }
+  #end { background: rgba(18, 10, 36, .55); gap: 10px; }
+  #end h1 { font-size: 44px; }
+  #trophy { display: flex; gap: 60px; }
+  .cup { position: relative; width: 170px; filter: drop-shadow(0 0 25px #ffd700);
+    animation: shine 1.2s ease-in-out infinite alternate; }
+  .cup svg { width: 170px; display: block; }
+  .cupface { position: absolute; left: 50%; top: 65px; transform: translate(-50%, -50%); }
+  .cupface img { width: 72px !important; height: 72px !important; }
+  @keyframes shine { from { transform: rotate(-4deg) scale(1); } to { transform: rotate(4deg) scale(1.07); } }
+  .row { display: flex; gap: 14px; align-items: center; font-size: 28px; }
+  .row span { width: 220px; text-align: right; }
+  button { font: inherit; font-size: 28px; padding: 12px 28px; border-radius: 40px; border: 3px solid #fff3;
+    background: #ffffff14; color: #fff; cursor: pointer; }
+  button.on { background: #f7c843; border-color: #f7c843; color: #2a1600; font-weight: 800; }
+  #start, .again { font-size: 40px; padding: 18px 60px; background: #7f0909; border-color: #f7c843;
+    color: #f7e7b0; font-weight: 800; }
+  .help { font-size: 22px; opacity: .8; max-width: 950px; line-height: 1.5; }
+  #status { position: fixed; bottom: 20px; left: 0; right: 0; text-align: center; font-size: 26px; }
+  #result { font-size: 28px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="menu" class="overlay">
+  <h1>🧹 Broom Race 🧹</h1>
+  <div class="row"><span>Players</span>
+    <button data-players="1">1 player</button><button data-players="2">2 players</button></div>
+  <div class="row" id="lvl0"><span id="lvl0name">Left player</span>
+    <button data-side="0" data-level="easy">Easy</button><button data-side="0" data-level="hard">Hard</button></div>
+  <div class="row" id="lvl1"><span>Right player</span>
+    <button data-side="1" data-level="easy">Easy</button><button data-side="1" data-level="hard">Hard</button></div>
+  <button id="home" onclick="location.href='../../'">🏠 All games</button>
+  <button id="start">Start ▶</button>
+  <div class="help">Move your body left and right to steer your broom 🧹 Fly through the golden rings!<br>
+    Ring = 1 point. &nbsp; Big ring with a star = 3 points.<br>
+    Both hands up high 🙌 = BOOST! Double points for 3 seconds.<br>
+    Storm clouds and branches (Hard only) = minus 2. Fly around them!<br>
+    Keys: Space = start, Esc = back to menu, F = full screen, M = music on/off, H = all games<br>
+    Test keys: ← → = left broom, A D = right broom, B = boost</div>
+</div>
+
+<div id="end" class="overlay hidden">
+  <h1 id="endTitle"></h1>
+  <div id="trophy"></div>
+  <div id="result"></div>
+  <button class="again">Play again ▶</button>
+  <button id="toMenu">Menu</button>
+</div>
+
+<div id="status"></div>
+
+<script type="module">
+import { video, startTracking, track as trackPoses } from '../../shared/tracking.js';
+import { KIDS, drawKidFace, kidImg } from '../../shared/kids.js';
+
+const $ = s => document.querySelector(s);
+const canvas = $('#c'), ctx = canvas.getContext('2d');
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+let W, H, S;
+function resize() {
+  const d = devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight; S = H / 900;
+  canvas.width = W * d; canvas.height = H * d; ctx.setTransform(d, 0, 0, d, 0, 0);
+}
+addEventListener('resize', resize); resize();
+
+// ---------- settings ----------
+// travel = seconds for a ring to fly from the horizon to the broom. R = ring size. hit = how forgiving.
+const LEVELS = {
+  easy: { name: 'Easy', every: 1.7, travel: 4.2, R: 135, hit: 1.15, gold: 0.15, bad: 0 },
+  hard: { name: 'Hard', every: 1.0, travel: 2.6, R: 90, hit: 0.8, gold: 0.12, bad: 1.6 }, // bad = seconds between obstacles
+};
+const ROUND = +new URLSearchParams(location.search).get('t') || 60; // ?t=10 = 10 second round
+const BOOST = 3, COOL = 5, BOOST_SPEED = 1.6; // boost lasts 3 s, then 5 s to recharge
+const FACES = { easy: KIDS.player1, hard: KIDS.player2 }; // Easy = player 1, Hard = player 2
+const drawFace = (f, x, y, r, ring) => drawKidFace(ctx, f, x, y, r, ring);
+const COLORS = ['#ff6b5b', '#6fb4ff'];
+const settings = { players: 2, levels: ['easy', 'hard'] };
+
+function refreshMenu() {
+  document.querySelectorAll('[data-players]').forEach(b => b.classList.toggle('on', +b.dataset.players === settings.players));
+  document.querySelectorAll('[data-level]').forEach(b => b.classList.toggle('on', settings.levels[b.dataset.side] === b.dataset.level));
+  $('#lvl1').classList.toggle('hidden', settings.players === 1);
+  $('#lvl0name').textContent = settings.players === 1 ? 'Level' : 'Left player';
+}
+document.querySelectorAll('[data-players]').forEach(b => b.onclick = () => { settings.players = +b.dataset.players; refreshMenu(); });
+document.querySelectorAll('[data-level]').forEach(b => b.onclick = () => { settings.levels[b.dataset.side] = b.dataset.level; refreshMenu(); });
+refreshMenu();
+
+// ---------- sound ----------
+let ac;
+function tone(type, f1, f2, dur, vol, delay = 0) {
+  const t = ac.currentTime + delay, o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.connect(g); g.connect(ac.destination);
+  o.frequency.setValueAtTime(f1, t); o.frequency.exponentialRampToValueAtTime(f2, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function sfx(kind) {
+  if (!ac) return;
+  if (kind === 'ring') [1319, 1760, 2093].forEach((f, i) => tone('sine', f, f, 0.22, 0.22, i * 0.06)); // chime
+  if (kind === 'gold') [988, 1319, 1568, 1976, 2637].forEach((f, i) => tone('sine', f, f, 0.28, 0.25, i * 0.06));
+  if (kind === 'bad') { tone('sine', 140, 40, 0.4, 0.5); tone('sawtooth', 90, 50, 0.3, 0.15); }
+  if (kind === 'boost') { tone('sawtooth', 200, 1200, 0.6, 0.08); [784, 988, 1175, 1568].forEach((f, i) => tone('triangle', f, f, 0.2, 0.18, i * 0.07)); }
+  if (kind === 'beep') tone('square', 600, 600, 0.12, 0.15);
+  if (kind === 'go') tone('square', 900, 900, 0.3, 0.15);
+  if (kind === 'end') // trumpet fanfare
+    [[523, 0, .15], [523, .18, .15], [523, .36, .15], [698, .54, .35], [880, .92, .2], [784, 1.12, .2], [1047, 1.32, .9]]
+      .forEach(([f, d, len]) => { tone('sawtooth', f, f, len, 0.12, d); tone('triangle', f, f, len, 0.25, d); });
+}
+
+// ---------- background music (made by code: a magic waltz in E minor, 3 beats per bar) ----------
+const MELODY = [76, 79, 83,  84, 83, 79,  81, 76, 72,  75, 78, 71,
+                83, 79, 76,  79, 84, 88,  84, 81, 76,  78, 75, 71];
+const ROOTS = [40, 36, 45, 47], STEP = 60 / 150;
+let musicOn = true, musicTimer = null, musicStep = 0, nextNote = 0, musicGain = null;
+const midi = m => 440 * 2 ** ((m - 69) / 12);
+function note(freq, t, dur, type, vol) {
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.frequency.value = freq; o.connect(g); g.connect(musicGain);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function playStep(i, t) {
+  const m = MELODY[i % 24], beat = i % 3, root = ROOTS[Math.floor(i / 3) % 4];
+  note(midi(m), t, 1.0, 'sine', 0.45); note(midi(m + 12), t, 0.35, 'sine', 0.15); // bell sound
+  if (beat === 0) note(midi(root), t, STEP * 2.5, 'triangle', 0.6);
+  else note(midi(root + 12 + (beat === 1 ? 7 : 12)), t, STEP * 0.8, 'triangle', 0.25);
+}
+// Real music files from Iker (shared/music/, not in git). If a file can't play, the code waltz plays instead.
+const gameSong = new Audio('../../shared/music/game.mp3'), winnerSong = new Audio('../../shared/music/winner.mp3');
+gameSong.loop = true; gameSong.volume = 0.5; winnerSong.volume = 0.7;
+let winnerTimer = null;
+function startMusic() {
+  if (!musicOn) return;
+  stopWinnerSong();
+  gameSong.currentTime = 0;
+  gameSong.play().catch(startSynth);
+}
+function stopMusic() { gameSong.pause(); stopSynth(); }
+function playWinnerSong() {
+  if (!musicOn) return;
+  winnerTimer = setTimeout(() => { winnerSong.currentTime = 0; winnerSong.play().catch(() => {}); }, 2200); // after the trumpet
+}
+function stopWinnerSong() { clearTimeout(winnerTimer); winnerSong.pause(); }
+function startSynth() {
+  if (!ac || !musicOn || musicTimer) return;
+  musicGain = ac.createGain(); musicGain.gain.value = 0.12; musicGain.connect(ac.destination);
+  musicStep = 0; nextNote = ac.currentTime + 0.05;
+  musicTimer = setInterval(() => {
+    while (nextNote < ac.currentTime + 0.12) { playStep(musicStep++, nextNote); nextNote += STEP; }
+  }, 25);
+}
+function stopSynth() {
+  if (!musicTimer) return;
+  clearInterval(musicTimer); musicTimer = null;
+  musicGain.gain.setTargetAtTime(0, ac.currentTime, 0.1);
+}
+
+// ---------- camera + body tracking ----------
+let poses = [];
+const status = t => $('#status').textContent = t;
+const setup = () => startTracking(status);
+const track = now => { poses = trackPoses(now); };
+
+// Camera is mirrored, so x is flipped. Video is stretched to fill the screen.
+const sx = lm => (1 - lm.x) * W, sy = lm => lm.y * H;
+const seen = lm => (lm.visibility ?? 1) > 0.5;
+
+// ---------- game state ----------
+let state = 'menu', timeLeft = 0, countdown = 0, zones = [], particles = [], texts = [];
+const keys = new Set();
+
+const HORIZON = () => H * 0.36;          // where the rings appear
+const RIDER_Y = () => H - 190 * S;       // where the broom flies (middle of the rider)
+const zoneX = z => { const w = W / zones.length; return [z.i * w, (z.i + 1) * w]; };
+const RIDER_HALF = () => 55 * S;         // half the width of the rider
+function broomLimits(z) { const [x0, x1] = zoneX(z), m = RIDER_HALF() + 20 * S; return [x0 + m, x1 - m]; }
+
+function makeZones() {
+  zones = [];
+  for (let i = 0; i < settings.players; i++) {
+    const level = LEVELS[settings.levels[i]];
+    zones.push({ i, level, face: FACES[settings.levels[i]], score: 0, things: [], spawnT: 0.3, badT: level.bad * 0.7,
+      color: COLORS[i], x: 0, target: 0, vx: 0, wobble: 0, boost: 0, cool: 0, handsUp: 0, scroll: 0, lastU: 0, flash: 0 });
+  }
+  for (const z of zones) { const [x0, x1] = zoneX(z); z.x = z.target = (x0 + x1) / 2; }
+}
+
+// Each body goes to the half where its nose is. Steering = middle of the shoulders.
+function readBodies(dt) {
+  const found = zones.map(() => null);
+  for (const p of poses) {
+    if (!p[0] || !p[11] || !p[12]) continue;
+    const zi = zones.length === 1 ? 0 : (sx(p[0]) < W / 2 ? 0 : 1);
+    const width = Math.abs(p[11].x - p[12].x);
+    if (!found[zi] || width > found[zi].width) found[zi] = { p, width }; // closest body wins
+  }
+  zones.forEach((z, i) => {
+    const f = found[i];
+    if (f) {
+      const p = f.p, [x0, x1] = zoneX(z), cx = (x0 + x1) / 2;
+      const mid = (sx(p[11]) + sx(p[12])) / 2;
+      const [a, b] = broomLimits(z);
+      z.target = clamp(cx + (mid - cx) * 1.6, a, b); // a small step moves the broom a lot
+      // both wrists above the nose = hands up
+      const up = seen(p[15]) && seen(p[16]) && sy(p[15]) < sy(p[0]) && sy(p[16]) < sy(p[0]);
+      z.handsUp = up ? z.handsUp + dt : 0;
+      if (z.handsUp > 0.15) tryBoost(z);
+    }
+  });
+}
+
+function tryBoost(z) {
+  if (state !== 'play' || z.boost > 0 || z.cool > 0) return;
+  z.boost = BOOST; sfx('boost');
+  texts.push({ x: z.x, y: RIDER_Y() - 150 * S, t: 'BOOST!', life: 1.2, col: '#ffd84a', big: true });
+}
+
+// A thing comes from the horizon (p = 0) to the broom (p = 1). u = where it crosses the broom line.
+function spawnRing(z) {
+  const L = z.level, gold = Math.random() < L.gold;
+  const [a, b] = broomLimits(z), R = L.R * S * (gold ? 1.3 : 1);
+  let u = rand(a, b);
+  if (Math.abs(u - z.lastU) < 40 * S) u = rand(a, b); // some variety
+  z.lastU = u;
+  z.things.push({ kind: 'ring', gold, u, R, p: 0, wob: rand(0, 6.28) });
+}
+function spawnObstacle(z) {
+  const [x0, x1] = zoneX(z), w = x1 - x0;
+  // put it away from the newest ring so there is always a way through
+  const ringU = z.lastU, cloud = Math.random() < 0.55;
+  if (cloud) {
+    const R = 70 * S;
+    let u = ringU < (x0 + x1) / 2 ? rand(ringU + 180 * S, x1 - R) : rand(x0 + R, ringU - 180 * S);
+    u = clamp(u, x0 + R, x1 - R);
+    z.things.push({ kind: 'cloud', u, R, p: 0, wob: rand(0, 6.28) });
+  } else { // branch reaching in from the side away from the ring
+    const left = ringU > (x0 + x1) / 2, len = w * rand(0.3, 0.4);
+    z.things.push({ kind: 'branch', left, len, u: left ? x0 + len / 2 : x1 - len / 2, R: len / 2, p: 0, wob: rand(0, 6.28) });
+  }
+}
+
+function hitThing(z, o) {
+  const boosted = z.boost > 0, y = RIDER_Y();
+  if (o.kind === 'ring') {
+    const pts = (o.gold ? 3 : 1) * (boosted ? 2 : 1);
+    z.score += pts; sfx(o.gold ? 'gold' : 'ring'); o.hit = 1; z.flash = 0.25;
+    for (let k = 0; k < (o.gold ? 26 : 16); k++) {
+      const a = rand(0, 6.28), v = rand(150, 420) * S;
+      particles.push({ x: o.u + Math.cos(a) * o.R * .8, y: y + Math.sin(a) * o.R * .45, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 100 * S,
+        life: 0.7, col: Math.random() < 0.5 ? '#ffd84a' : '#fff6c8', r: rand(3, 7) });
+    }
+    texts.push({ x: o.u, y: y - o.R * 0.9, t: '+' + pts, life: 0.9, col: '#ffd84a' });
+  } else {
+    z.score = Math.max(0, z.score - 2); sfx('bad'); o.hit = 1; z.wobble = 1;
+    for (let k = 0; k < 12; k++) {
+      const a = rand(0, 6.28), v = rand(100, 300) * S;
+      particles.push({ x: z.x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0.6, col: o.kind === 'cloud' ? '#9aa3b8' : '#6b8f3a', r: rand(3, 7) });
+    }
+    texts.push({ x: z.x, y: y - 110 * S, t: '-2', life: 0.9, col: '#ff4d4d' });
+  }
+}
+
+function startGame() {
+  if (!ac) ac = new AudioContext();
+  ac.resume();
+  stopMusic(); startMusic();
+  makeZones(); particles = []; texts = [];
+  $('#menu').classList.add('hidden'); $('#end').classList.add('hidden');
+  state = 'count'; countdown = 3.99; lastBeep = 4;
+}
+let lastBeep = 4;
+
+function endGame() {
+  state = 'end'; stopMusic(); sfx('end'); playWinnerSong();
+  const best = Math.max(...zones.map(z => z.score)), winners = zones.filter(z => z.score === best);
+  $('#endTitle').textContent = zones.length === 1 ? `${zones[0].face.name}, Champion Flyer!`
+    : winners.length === 2 ? 'A tie! Two champions!' : `${winners[0].face.name} wins the Broom Race!`;
+  $('#trophy').innerHTML = winners.map(z => `<div class="cup">${CUP}<div class="cupface">${faceImg(z.face, '#fff6c8')}</div></div>`).join('');
+  const lines = zones.map(z => `<span style="color:${z.color}">${faceImg(z.face, z.color)} ${z.face.name} (${z.level.name}): <b>${z.score}</b> points</span>`);
+  $('#result').innerHTML = lines.join('<br>');
+  $('#end').classList.remove('hidden');
+}
+const CUP = `<svg viewBox="0 0 200 240"><defs><linearGradient id="gold" x1="0" x2="1">
+  <stop offset="0" stop-color="#8a5a00"/><stop offset=".35" stop-color="#fff1b0"/><stop offset=".6" stop-color="#f5c542"/>
+  <stop offset="1" stop-color="#8a5a00"/></linearGradient></defs>
+  <path d="M48 35 C5 35 5 105 62 112" fill="none" stroke="url(#gold)" stroke-width="12"/>
+  <path d="M152 35 C195 35 195 105 138 112" fill="none" stroke="url(#gold)" stroke-width="12"/>
+  <path d="M38 20 H162 C162 105 132 135 100 140 C68 135 38 105 38 20Z" fill="url(#gold)"/>
+  <rect x="90" y="138" width="20" height="38" fill="url(#gold)"/>
+  <path d="M62 176 H138 L150 202 H50Z" fill="url(#gold)"/>
+  <rect x="36" y="202" width="128" height="30" rx="5" fill="#7f0909" stroke="#f5c542" stroke-width="3"/>
+  <text x="100" y="223" text-anchor="middle" font-family="Cinzel, Georgia, serif" font-weight="800" font-size="17"
+    fill="#f7e7b0">⚡ CHAMPION ⚡</text></svg>`;
+const faceImg = kidImg;
+function toMenu() {
+  state = 'menu'; zones = []; stopMusic(); stopWinnerSong();
+  $('#end').classList.add('hidden'); $('#menu').classList.remove('hidden');
+}
+
+$('#start').onclick = startGame;
+document.querySelector('.again').onclick = startGame;
+$('#toMenu').onclick = toMenu;
+addEventListener('keydown', e => {
+  keys.add(e.code);
+  if (e.code === 'Space' && state !== 'play' && state !== 'count') startGame();
+  if (e.code === 'Escape') toMenu();
+  if (e.code === 'KeyH') location.href = '../../';
+  if (e.code === 'KeyM') { musicOn = !musicOn; if (musicOn && (state === 'play' || state === 'count')) startMusic(); else { stopMusic(); stopWinnerSong(); } }
+  if (e.code === 'KeyF') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+  if (e.code === 'KeyB') zones.forEach(tryBoost);
+  if (e.code.startsWith('Arrow')) e.preventDefault();
+});
+addEventListener('keyup', e => keys.delete(e.code));
+addEventListener('blur', () => keys.clear());
+
+// test keys: arrows = left (or only) broom, A/D = right broom
+function readKeys(dt) {
+  const move = (z, l, r) => {
+    const d = (keys.has(r) ? 1 : 0) - (keys.has(l) ? 1 : 0);
+    if (!d) return;
+    const [a, b] = broomLimits(z);
+    z.target = clamp(z.target + d * 700 * S * dt, a, b);
+  };
+  if (zones[0]) move(zones[0], 'ArrowLeft', 'ArrowRight');
+  const z2 = zones[1] || zones[0];
+  if (z2) move(z2, 'KeyA', 'KeyD');
+}
+
+// ---------- update ----------
+function update(dt) {
+  if (state === 'count') {
+    countdown -= dt;
+    const n = Math.ceil(countdown);
+    if (n < lastBeep) { lastBeep = n; sfx(n > 0 ? 'beep' : 'go'); }
+    if (countdown <= 0) { state = 'play'; timeLeft = ROUND; }
+  } else if (state === 'play') {
+    timeLeft -= dt;
+    if (timeLeft <= 0) { timeLeft = 0; endGame(); }
+  }
+  if (zones.length) { readBodies(dt); readKeys(dt); }
+
+  const y = RIDER_Y();
+  for (const z of zones) {
+    // smooth steering + lean
+    const old = z.x;
+    z.x += (z.target - z.x) * (1 - Math.exp(-dt * 7));
+    z.vx = (z.x - old) / Math.max(dt, 0.001);
+    z.wobble = Math.max(0, z.wobble - dt);
+    z.flash = Math.max(0, z.flash - dt);
+    if (z.boost > 0) { z.boost -= dt; if (z.boost <= 0) { z.boost = 0; z.cool = COOL; } }
+    else z.cool = Math.max(0, z.cool - dt);
+    const speed = (state === 'play' || state === 'count' ? 1 : 0.4) * (z.boost > 0 ? BOOST_SPEED : 1);
+    z.scroll += dt * speed / z.level.travel;
+
+    if (state === 'play') {
+      z.spawnT -= dt * speed;
+      if (z.spawnT <= 0) { spawnRing(z); z.spawnT = z.level.every * rand(0.8, 1.2); }
+      if (z.level.bad) {
+        z.badT -= dt * speed;
+        if (z.badT <= 0) { spawnObstacle(z); z.badT = z.level.bad * rand(0.8, 1.3); z.spawnT = Math.max(z.spawnT, 0.35); }
+      }
+    }
+    // things fly straight toward the player. They NEVER steer toward her.
+    for (const o of z.things) {
+      const before = o.p;
+      o.p += dt * speed / z.level.travel;
+      o.wob += dt * 3;
+      if (o.hit) o.hit += dt;
+      if (state === 'play' && before < 1 && o.p >= 1 && !o.hit) {
+        const dx = Math.abs(z.x - o.u);
+        if (o.kind === 'ring' && dx < o.R * z.level.hit + (z.level.name === 'Easy' ? 30 * S : 0)) hitThing(z, o);
+        if (o.kind === 'cloud' && dx < o.R * 0.75 + RIDER_HALF() * 0.6) hitThing(z, o);
+        if (o.kind === 'branch' && dx < o.len / 2 + RIDER_HALF() * 0.5) hitThing(z, o);
+      }
+    }
+    z.things = z.things.filter(o => o.p < 1.35);
+
+    // broom trail: little sparkles, a big golden trail when boosting
+    const tail = y + 75 * S, boosted = z.boost > 0;
+    if (state !== 'end' && (boosted || Math.random() < 0.5))
+      for (let k = 0; k < (boosted ? 3 : 1); k++)
+        particles.push({ x: z.x + rand(-18, 18) * S, y: tail, vx: rand(-40, 40) * S - z.vx * 0.3, vy: rand(150, 300) * S, g: 0,
+          life: boosted ? 0.7 : 0.4, col: boosted ? (Math.random() < 0.6 ? '#ffd84a' : '#fff1b0') : z.color, r: boosted ? rand(4, 8) : rand(2, 4) });
+  }
+  if (state === 'end' && Math.random() < 0.6) // golden confetti for the champion
+    particles.push({ x: rand(0, W), y: -10, vx: rand(-40, 40) * S, vy: rand(50, 150) * S, life: 3,
+      col: ['#f7c843', '#fff1b0', '#ff6b5b', '#ffffff'][Math.floor(rand(0, 4))], r: rand(3, 7), g: 20 });
+  for (const p of particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += (p.g ?? 500) * S * dt; p.life -= dt; }
+  particles = particles.filter(p => p.life > 0);
+  for (const t of texts) { t.y -= 80 * S * dt; t.life -= dt; }
+  texts = texts.filter(t => t.life > 0);
+}
+
+// ---------- draw ----------
+// Perspective: k = how near (0 far .. 1 at the broom). Things grow and spread out as they come near.
+const near = p => p * p;
+function place(z, o) {
+  const [x0, x1] = zoneX(z), cx = (x0 + x1) / 2, hy = HORIZON(), k = near(o.p);
+  const sc = 0.08 + 0.92 * k;
+  return { x: cx + (o.u - cx) * sc, y: hy + (RIDER_Y() - hy) * k, sc };
+}
+
+function starPath(R, r) {
+  ctx.beginPath();
+  for (let k = 0; k < 10; k++) { const a = k * Math.PI / 5 - Math.PI / 2, rr = k % 2 ? r : R; ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); }
+  ctx.closePath();
+}
+
+// A ring is an oval hoop tipped back a bit. half = 'back' (top arc) or 'front' (bottom arc) or 'all'.
+function drawRing(o, pos, half) {
+  const rx = o.R * pos.sc, ry = rx * 0.62, fade = Math.min(1, o.p * 4) * (o.hit ? Math.max(0, 1 - o.hit * 2.5) : 1);
+  if (fade <= 0) return;
+  const a0 = half === 'front' ? 0 : Math.PI, a1 = half === 'back' ? Math.PI * 2 : half === 'front' ? Math.PI : Math.PI * 3;
+  const grow = o.hit ? 1 + o.hit * 1.5 : 1;
+  ctx.save(); ctx.globalAlpha = fade;
+  ctx.lineCap = 'round';
+  // soft glow = a wide see-through line (cheaper than shadowBlur)
+  ctx.strokeStyle = o.gold ? 'rgba(255,220,90,.35)' : 'rgba(255,210,80,.25)';
+  ctx.lineWidth = (o.gold ? 26 : 20) * S * pos.sc;
+  ctx.beginPath(); ctx.ellipse(pos.x, pos.y, rx * grow, ry * grow, 0, a0, a1); ctx.stroke();
+  ctx.strokeStyle = o.gold ? '#ffe680' : '#f7c843'; ctx.lineWidth = (o.gold ? 13 : 10) * S * pos.sc;
+  ctx.beginPath(); ctx.ellipse(pos.x, pos.y, rx * grow, ry * grow, 0, a0, a1); ctx.stroke();
+  ctx.strokeStyle = '#fff6c8'; ctx.lineWidth = 3 * S * pos.sc;
+  ctx.beginPath(); ctx.ellipse(pos.x, pos.y - 2 * S * pos.sc, rx * grow, ry * grow, 0, a0, a1); ctx.stroke();
+  if (o.gold && half !== 'front' && !o.hit) { // spinning star floating above the big ring
+    ctx.translate(pos.x, pos.y - ry - 34 * S * pos.sc); ctx.rotate(Math.sin(o.wob) * 0.4);
+    ctx.fillStyle = 'rgba(255,230,120,.3)'; starPath(40 * S * pos.sc, 18 * S * pos.sc); ctx.fill();
+    ctx.fillStyle = '#fff1a0'; starPath(28 * S * pos.sc, 12 * S * pos.sc); ctx.fill();
+    ctx.strokeStyle = '#c98a00'; ctx.lineWidth = 2 * S * pos.sc; ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawCloud(o, pos) {
+  const r = o.R * pos.sc, fade = Math.min(1, o.p * 4) * (o.hit ? Math.max(0, 1 - o.hit * 2) : 1);
+  if (fade <= 0) return;
+  ctx.save(); ctx.globalAlpha = fade; ctx.translate(pos.x, pos.y - r * 0.2);
+  // lightning bolt under the cloud
+  if (Math.sin(o.wob * 3) > 0.2) {
+    ctx.fillStyle = '#ffef6b';
+    ctx.beginPath(); ctx.moveTo(-r * .1, r * .3); ctx.lineTo(r * .15, r * .3); ctx.lineTo(0, r * .65);
+    ctx.lineTo(r * .18, r * .65); ctx.lineTo(-r * .15, r * 1.15); ctx.lineTo(-r * .02, r * .75); ctx.lineTo(-r * .2, r * .75); ctx.closePath(); ctx.fill();
+  }
+  ctx.fillStyle = '#4a4f63';
+  for (const [dx, dy, rr] of [[-.55, .1, .45], [.55, .1, .45], [-.2, -.2, .55], [.25, -.25, .5], [0, .15, .55]]) {
+    ctx.beginPath(); ctx.arc(dx * r, dy * r, rr * r, 0, 7); ctx.fill();
+  }
+  ctx.fillStyle = '#6b7189';
+  for (const [dx, dy, rr] of [[-.2, -.3, .38], [.25, -.35, .32]]) { ctx.beginPath(); ctx.arc(dx * r, dy * r, rr * r, 0, 7); ctx.fill(); }
+  // grumpy eyes
+  ctx.fillStyle = '#1b1d28';
+  for (const ex of [-.2, .2]) { ctx.beginPath(); ctx.arc(ex * r, .05 * r, .07 * r, 0, 7); ctx.fill(); }
+  ctx.strokeStyle = '#1b1d28'; ctx.lineWidth = Math.max(1, .05 * r);
+  ctx.beginPath(); ctx.moveTo(-.32 * r, -.1 * r); ctx.lineTo(-.1 * r, -.04 * r); ctx.moveTo(.32 * r, -.1 * r); ctx.lineTo(.1 * r, -.04 * r); ctx.stroke();
+  ctx.restore();
+}
+
+function drawBranch(z, o, pos) {
+  const fade = Math.min(1, o.p * 4) * (o.hit ? Math.max(0, 1 - o.hit * 2) : 1);
+  if (fade <= 0) return;
+  const len = o.len * pos.sc, dir = o.left ? 1 : -1, x0 = pos.x - dir * len / 2, sc = pos.sc;
+  ctx.save(); ctx.globalAlpha = fade; ctx.translate(x0, pos.y); ctx.scale(dir, 1);
+  ctx.rotate(Math.sin(o.wob) * 0.04);
+  ctx.strokeStyle = '#5a3a1e'; ctx.lineCap = 'round';
+  ctx.lineWidth = 22 * S * sc; ctx.beginPath(); ctx.moveTo(-10 * S * sc, 0); ctx.quadraticCurveTo(len * .5, -18 * S * sc, len, 6 * S * sc); ctx.stroke();
+  ctx.lineWidth = 9 * S * sc;
+  ctx.beginPath(); ctx.moveTo(len * .45, -10 * S * sc); ctx.lineTo(len * .62, -45 * S * sc);
+  ctx.moveTo(len * .7, -5 * S * sc); ctx.lineTo(len * .85, 30 * S * sc); ctx.stroke();
+  ctx.fillStyle = '#3f7a2a';
+  for (const [fx, fy] of [[.6, -48], [.66, -40], [.88, 32], [.82, 26], [1, 6], [.95, -6], [.3, -14]]) {
+    ctx.beginPath(); ctx.ellipse(len * fx, fy * S * sc, 16 * S * sc, 9 * S * sc, fx * 3, 0, 7); ctx.fill();
+  }
+  ctx.restore();
+}
+
+// The rider seen from behind: broom pointing up the screen, cape, arms, face as the head.
+function drawRider(z) {
+  const y = RIDER_Y(), s = S, boosted = z.boost > 0;
+  const lean = clamp(z.vx / (900 * S), -0.35, 0.35) + (z.wobble > 0 ? Math.sin(z.wobble * 30) * 0.25 * z.wobble : 0);
+  const bob = Math.sin(performance.now() / 300) * 5 * s;
+  ctx.save(); ctx.translate(z.x, y + bob); ctx.rotate(lean);
+  // bristles (near us, at the bottom)
+  ctx.fillStyle = '#b07a2c';
+  ctx.beginPath(); ctx.moveTo(-12 * s, 35 * s); ctx.lineTo(-38 * s, 92 * s); ctx.quadraticCurveTo(0, 104 * s, 38 * s, 92 * s); ctx.lineTo(12 * s, 35 * s); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = '#7a5218'; ctx.lineWidth = 2 * s;
+  ctx.beginPath(); for (let k = -3; k <= 3; k++) { ctx.moveTo(k * 3 * s, 40 * s); ctx.lineTo(k * 11 * s, 96 * s); } ctx.stroke();
+  ctx.fillStyle = '#c0392b'; ctx.fillRect(-14 * s, 34 * s, 28 * s, 8 * s); // band
+  // stick, going away from us (up the screen), sticking out above her head
+  ctx.strokeStyle = '#6b4220'; ctx.lineCap = 'round'; ctx.lineWidth = 12 * s;
+  ctx.beginPath(); ctx.moveTo(0, 40 * s); ctx.lineTo(0, -168 * s); ctx.stroke();
+  ctx.strokeStyle = '#9a6a3a'; ctx.lineWidth = 4 * s;
+  ctx.beginPath(); ctx.moveTo(-3 * s, -120 * s); ctx.lineTo(-3 * s, -164 * s); ctx.stroke();
+  // cape flowing back toward us
+  const flap = Math.sin(performance.now() / 120) * 6 * s * (boosted ? 1.8 : 1);
+  ctx.fillStyle = '#2b1240';
+  ctx.beginPath(); ctx.moveTo(-30 * s, -44 * s); ctx.lineTo(30 * s, -44 * s);
+  ctx.quadraticCurveTo(58 * s, 0, 56 * s + flap, 42 * s); ctx.quadraticCurveTo(0, 56 * s - flap, -56 * s - flap, 42 * s);
+  ctx.quadraticCurveTo(-58 * s, 0, -30 * s, -44 * s); ctx.fill();
+  ctx.strokeStyle = z.color; ctx.lineWidth = 5 * s;
+  ctx.beginPath(); ctx.moveTo(56 * s + flap, 42 * s); ctx.quadraticCurveTo(0, 56 * s - flap, -56 * s - flap, 42 * s); ctx.stroke();
+  // striped scarf in her color
+  ctx.fillStyle = z.color; ctx.fillRect(-26 * s, -52 * s, 52 * s, 13 * s);
+  ctx.fillStyle = '#f7c843'; for (const sx2 of [-16, -2, 12]) ctx.fillRect(sx2 * s, -52 * s, 6 * s, 13 * s);
+  // arms go past her head and hold the broom in front of her
+  ctx.strokeStyle = '#3a1a55'; ctx.lineWidth = 13 * s;
+  ctx.beginPath(); ctx.moveTo(-28 * s, -42 * s); ctx.quadraticCurveTo(-52 * s, -100 * s, -9 * s, -132 * s);
+  ctx.moveTo(28 * s, -42 * s); ctx.quadraticCurveTo(52 * s, -100 * s, 9 * s, -132 * s); ctx.stroke();
+  ctx.fillStyle = '#f2c9a0';
+  for (const hx of [-8, 8]) { ctx.beginPath(); ctx.arc(hx * s, -134 * s, 8 * s, 0, 7); ctx.fill(); }
+  // head: her face (or a simple head if there is no photo)
+  const hr = 34 * s, hy = -80 * s;
+  ctx.fillStyle = '#f2c9a0'; ctx.beginPath(); ctx.arc(0, hy, hr, 0, 7); ctx.fill();
+  ctx.fillStyle = '#5b3a1a'; ctx.beginPath(); ctx.arc(0, hy - 6 * s, hr, Math.PI, 0); ctx.fill();
+  drawFace(z.face, 0, hy, hr, boosted ? '#ffd84a' : z.color);
+  if (!z.face.img?.naturalWidth) { ctx.strokeStyle = z.color; ctx.lineWidth = 4 * s; ctx.beginPath(); ctx.arc(0, hy, hr, 0, 7); ctx.stroke(); }
+  ctx.restore();
+}
+
+const stars = Array.from({ length: 120 }, () => ({ x: Math.random(), y: Math.random() * 0.34, r: rand(0.6, 2.2), p: rand(0, 6.28) }));
+const skyClouds = Array.from({ length: 5 }, (_, i) => ({ x: i / 5 + rand(0, .1), y: rand(0.08, 0.28), w: rand(0.12, 0.2), v: rand(0.006, 0.015) }));
+// castle on the far shore: x, height, width (parts of the screen)
+const TOWERS = [[.3, .09, .03], [.35, .14, .025], [.4, .1, .04], [.46, .17, .03], [.52, .12, .05], [.58, .19, .03], [.64, .11, .035], [.7, .08, .025]];
+
+function drawWorld() {
+  const t = performance.now() / 1000, hy = HORIZON();
+  const sky = ctx.createLinearGradient(0, 0, 0, hy);
+  sky.addColorStop(0, 'rgba(8,5,35,.92)'); sky.addColorStop(1, 'rgba(60,30,100,.75)');
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, hy);
+  ctx.fillStyle = '#fff';
+  for (const st of stars) {
+    ctx.globalAlpha = 0.35 + 0.65 * Math.abs(Math.sin(t * 1.3 + st.p));
+    ctx.beginPath(); ctx.arc(st.x * W, st.y * H, st.r * S, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  // moon (one small glow only)
+  ctx.save(); ctx.shadowColor = '#fff8dc'; ctx.shadowBlur = 40 * S; ctx.fillStyle = '#fff8dc';
+  ctx.beginPath(); ctx.arc(W * .82, 70 * S, 34 * S, 0, 7); ctx.fill(); ctx.restore();
+  // slow clouds
+  ctx.fillStyle = 'rgba(180,170,220,.12)';
+  for (const c of skyClouds) {
+    const x = ((c.x + t * c.v) % 1.3 - 0.15) * W, y = c.y * H, w = c.w * W;
+    ctx.beginPath(); ctx.ellipse(x, y, w / 2, w / 9, 0, 0, 7); ctx.ellipse(x + w * .15, y - w / 14, w / 4, w / 10, 0, 0, 7); ctx.fill();
+  }
+  // castle
+  ctx.fillStyle = 'rgba(10,6,24,.95)';
+  ctx.fillRect(W * .28, hy - H * .04, W * .44, H * .04);
+  for (const [fx, fh, fw] of TOWERS) {
+    const x = fx * W, w = fw * W, h = fh * H;
+    ctx.fillRect(x - w / 2, hy - h, w, h);
+    ctx.beginPath(); ctx.moveTo(x - w * .65, hy - h); ctx.lineTo(x, hy - h - w * 1.5); ctx.lineTo(x + w * .65, hy - h); ctx.fill();
+  }
+  ctx.fillStyle = 'rgba(255,200,90,.8)';
+  for (const [fx, fh] of TOWERS) ctx.fillRect(fx * W - 3 * S, hy - fh * H * .6, 6 * S, 10 * S);
+  // far hills
+  ctx.fillStyle = 'rgba(14,10,34,.95)';
+  ctx.beginPath(); ctx.moveTo(0, hy); ctx.quadraticCurveTo(W * .12, hy - H * .07, W * .27, hy);
+  ctx.moveTo(W * .72, hy); ctx.quadraticCurveTo(W * .88, hy - H * .08, W, hy - H * .02); ctx.lineTo(W, hy); ctx.fill();
+  // lake
+  const lake = ctx.createLinearGradient(0, hy, 0, H);
+  lake.addColorStop(0, 'rgba(30,25,80,.8)'); lake.addColorStop(1, 'rgba(10,20,50,.6)');
+  ctx.fillStyle = lake; ctx.fillRect(0, hy, W, H - hy);
+  // moon path on the water
+  ctx.fillStyle = 'rgba(255,248,220,.10)';
+  ctx.beginPath(); ctx.moveTo(W * .8, hy); ctx.lineTo(W * .84, hy); ctx.lineTo(W * .95, H); ctx.lineTo(W * .7, H); ctx.fill();
+}
+
+// water waves rushing toward the player: shows the speed. Each half has its own speed (boost!)
+function drawWaves(z) {
+  const [x0, x1] = zoneX(z), hy = HORIZON(), cx = (x0 + x1) / 2, n = 9;
+  ctx.save(); ctx.beginPath(); ctx.rect(x0, hy, x1 - x0, H - hy); ctx.clip();
+  ctx.strokeStyle = z.boost > 0 ? 'rgba(255,220,120,.35)' : 'rgba(170,190,255,.22)'; ctx.lineCap = 'round';
+  for (let k = 0; k < n; k++) {
+    const q = ((k / n + z.scroll * 1.2) % 1), kk = q * q, y = hy + (H - hy) * kk * 1.15;
+    ctx.lineWidth = (1 + 4 * kk) * S;
+    for (const side of [-1, 1]) for (let j = 0; j < 3; j++) {
+      const off = (0.15 + j * 0.32 + (k % 2) * 0.12) * (x1 - x0) * (0.25 + kk), len = (20 + 90 * kk) * S;
+      const x = cx + side * off;
+      ctx.beginPath(); ctx.moveTo(x - len / 2, y); ctx.lineTo(x + len / 2, y); ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function drawBoostMeter(z, cx, y) {
+  const w = 160 * S, h = 16 * S, x = cx - w / 2;
+  ctx.fillStyle = 'rgba(0,0,0,.4)'; ctx.fillRect(x, y, w, h);
+  let fill, col, label;
+  if (z.boost > 0) { fill = z.boost / BOOST; col = '#ffd84a'; label = 'BOOST!'; }
+  else if (z.cool > 0) { fill = 1 - z.cool / COOL; col = '#8a7fb0'; label = 'charging…'; }
+  else { fill = 1; col = '#7dff9a'; label = '🙌 boost ready'; }
+  ctx.fillStyle = col; ctx.fillRect(x, y, w * fill, h);
+  ctx.strokeStyle = 'rgba(255,255,255,.6)'; ctx.lineWidth = 2; ctx.strokeRect(x, y, w, h);
+  ctx.font = `600 ${18 * S}px "Cinzel", Georgia, serif`; ctx.fillStyle = col; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  ctx.fillText(label, cx, y + h + 4 * S);
+}
+
+function draw() {
+  // camera picture, mirrored, faint under the night world
+  ctx.fillStyle = '#120a24'; ctx.fillRect(0, 0, W, H);
+  if (video.readyState >= 2) {
+    ctx.save(); ctx.globalAlpha = 0.45; ctx.translate(W, 0); ctx.scale(-1, 1);
+    ctx.drawImage(video, 0, 0, W, H); ctx.restore();
+  }
+  drawWorld();
+
+  for (const z of zones) {
+    const [x0, x1] = zoneX(z);
+    drawWaves(z);
+    ctx.save(); ctx.beginPath(); ctx.rect(x0, 0, x1 - x0, H); ctx.clip();
+    if (z.wobble > 0) { ctx.fillStyle = `rgba(255,0,0,${z.wobble * .25})`; ctx.fillRect(x0, 0, x1 - x0, H); }
+    if (z.boost > 0) { ctx.fillStyle = 'rgba(255,215,90,.07)'; ctx.fillRect(x0, 0, x1 - x0, H); }
+    // far things first. Rings near the broom: back half behind her, front half in front of her.
+    const list = z.things.map(o => ({ o, pos: place(z, o) })).sort((a, b) => a.o.p - b.o.p);
+    const drawOne = ({ o, pos }, half) => o.kind === 'ring' ? drawRing(o, pos, half) : o.kind === 'cloud' ? drawCloud(o, pos) : drawBranch(z, o, pos);
+    for (const it of list) if (it.o.p < 1) drawOne(it, it.o.kind === 'ring' && it.o.p > 0.85 ? 'back' : 'all');
+    drawRider(z);
+    for (const it of list) {
+      if (it.o.p >= 1) drawOne(it, it.o.kind === 'ring' ? 'all' : 'all');
+      else if (it.o.kind === 'ring' && it.o.p > 0.85) drawOne(it, 'front');
+    }
+    ctx.restore();
+    // score
+    ctx.fillStyle = z.color; ctx.font = `800 ${70 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.fillText(z.score, (x0 + x1) / 2 + 40 * S, 18 * S);
+    ctx.fillStyle = '#f2c9a0'; ctx.beginPath(); ctx.arc((x0 + x1) / 2 - 50 * S, 55 * S, 42 * S, 0, 7); ctx.fill();
+    drawFace(z.face, (x0 + x1) / 2 - 50 * S, 55 * S, 42 * S, z.color);
+    ctx.font = `600 ${24 * S}px "Cinzel Decorative", Georgia, serif`; ctx.fillStyle = '#fff';
+    ctx.fillText(z.face.name + ' · ' + z.level.name, (x0 + x1) / 2, 100 * S);
+    drawBoostMeter(z, (x0 + x1) / 2, 135 * S);
+  }
+  if (zones.length === 2) {
+    ctx.strokeStyle = 'rgba(247,200,67,.45)'; ctx.lineWidth = 4; ctx.setLineDash([20, 16]);
+    ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  for (const p of particles) {
+    ctx.globalAlpha = Math.min(1, Math.max(0, p.life / 0.6)); ctx.fillStyle = p.col;
+    ctx.beginPath(); ctx.arc(p.x, p.y, (p.r || 8) * S, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  for (const t of texts) {
+    ctx.globalAlpha = Math.max(0, Math.min(1, t.life / 0.8)); ctx.fillStyle = t.col;
+    ctx.font = `800 ${(t.big ? 60 : 50) * S}px "Cinzel Decorative", Georgia, serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(t.t, t.x, t.y);
+  }
+  ctx.globalAlpha = 1;
+
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#fff';
+  if (state === 'play') {
+    ctx.font = `800 ${44 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillStyle = timeLeft < 10 ? '#ff6b6b' : '#fff';
+    ctx.fillText('⌛ ' + Math.ceil(timeLeft), zones.length === 1 ? W - 110 * S : W / 2, 50 * S); // top: the brooms fly at the bottom
+  }
+  if (state === 'count') {
+    const n = Math.ceil(countdown);
+    ctx.font = `900 ${260 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillText(n > 0 ? n : 'GO!', W / 2, H / 2 - 60 * S);
+    ctx.font = `600 ${36 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillText('Fly through the golden rings!', W / 2, H / 2 + 110 * S);
+  }
+}
+
+// ---------- main loop ----------
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  track(now); update(dt); draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+setup();
+</script>
+</body>
+</html>

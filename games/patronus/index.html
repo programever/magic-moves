@@ -1,0 +1,703 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Patronus vs Dementors</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Cinzel:wght@600;800&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; height: 100%; background: #0a0f24; overflow: hidden;
+    font-family: "Cinzel", Georgia, serif; color: #fff; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; }
+  video { display: none; }
+  .overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 22px; background: rgba(8, 12, 32, .86); text-align: center; }
+  .hidden { display: none !important; }
+  h1 { font-family: "Cinzel Decorative", Georgia, serif; font-size: 56px; margin: 0; color: #cfeeff;
+    text-shadow: 0 0 25px #7fd0ffaa; }
+  #end { background: rgba(8, 12, 32, .55); gap: 10px; }
+  #end h1 { font-size: 44px; color: #f7c843; text-shadow: 0 0 25px #ffb30088; }
+  #trophy { display: flex; gap: 60px; }
+  .cup { position: relative; width: 170px; filter: drop-shadow(0 0 25px #ffd700);
+    animation: shine 1.2s ease-in-out infinite alternate; }
+  .cup svg { width: 170px; display: block; }
+  .cupface { position: absolute; left: 50%; top: 65px; transform: translate(-50%, -50%); }
+  .cupface img { width: 72px !important; height: 72px !important; }
+  @keyframes shine { from { transform: rotate(-4deg) scale(1); } to { transform: rotate(4deg) scale(1.07); } }
+  .row { display: flex; gap: 14px; align-items: center; font-size: 28px; }
+  .row span { width: 220px; text-align: right; }
+  button { font: inherit; font-size: 28px; padding: 12px 28px; border-radius: 40px; border: 3px solid #fff3;
+    background: #ffffff14; color: #fff; cursor: pointer; }
+  button.on { background: #bfe6ff; border-color: #bfe6ff; color: #0a1a33; font-weight: 800; }
+  #start, .again { font-size: 40px; padding: 18px 60px; background: #1d3b78; border-color: #bfe6ff;
+    color: #e8f6ff; font-weight: 800; }
+  .help { font-size: 20px; opacity: .8; max-width: 1100px; line-height: 1.45; }
+  #menu { gap: 16px; }
+  #status { position: fixed; bottom: 20px; left: 0; right: 0; text-align: center; font-size: 26px; }
+  #result { font-size: 28px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="menu" class="overlay">
+  <h1>🦌 Patronus vs Dementors 🦌</h1>
+  <div class="row"><span>Players</span>
+    <button data-players="1">1 player</button><button data-players="2">2 players</button></div>
+  <div class="row" id="lvl0"><span id="lvl0name">Left player</span>
+    <button data-side="0" data-level="easy">Easy</button><button data-side="0" data-level="hard">Hard</button></div>
+  <div class="row" id="lvl1"><span>Right player</span>
+    <button data-side="1" data-level="easy">Easy</button><button data-side="1" data-level="hard">Hard</button></div>
+  <button id="home" onclick="location.href='../../'">🏠 All games</button>
+  <button id="start">Start ▶</button>
+  <div class="help">Right hand = magic wand ✨ Hold it on a Dementor until the silver ring is full.<br>
+    Dementor = 1 point. Big Dementor = 3 points. Hard: Dementor at the castle = minus 1.<br>
+    Keys: Space = start, Esc = menu, F = full screen, M = music, H = all games</div>
+</div>
+
+<div id="end" class="overlay hidden">
+  <h1 id="endTitle"></h1>
+  <div id="trophy"></div>
+  <div id="result"></div>
+  <button class="again">Play again ▶</button>
+  <button id="toMenu">Menu</button>
+</div>
+
+<div id="status"></div>
+
+<script type="module">
+import { video, startTracking, track as trackPoses } from '../../shared/tracking.js';
+import { KIDS, drawKidFace, kidImg } from '../../shared/kids.js';
+
+const $ = s => document.querySelector(s);
+const canvas = $('#c'), ctx = canvas.getContext('2d');
+const rand = (a, b) => a + Math.random() * (b - a);
+
+let W, H, S;
+function resize() {
+  const d = devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight; S = H / 900;
+  canvas.width = W * d; canvas.height = H * d; ctx.setTransform(d, 0, 0, d, 0, 0);
+  makeBackground();
+}
+
+// ---------- settings ----------
+// every = seconds between new Dementors, r = size, v = fall speed, side = share that drift sideways,
+// hold = seconds to hold the wand still, big = share of Big Dementors, max = most on screen, miss = points lost at the castle
+const LEVELS = {
+  easy: { name: 'Easy', every: 2.2, rMin: 64, rMax: 74, vMin: 32, vMax: 48, side: 0, hold: 0.6, big: 0.15, max: 4, miss: 0 },
+  hard: { name: 'Hard', every: 1.1, rMin: 42, rMax: 50, vMin: 60, vMax: 95, side: 0.4, hold: 1.0, big: 0.15, max: 7, miss: 1 },
+};
+const ROUND = +new URLSearchParams(location.search).get('t') || 60, HAND_R = 34; // ?t=10 = 10 second round
+const FACES = { easy: KIDS.player1, hard: KIDS.player2 }; // Easy = player 1, Hard = player 2
+const drawFace = (f, x, y, r, ring) => drawKidFace(ctx, f, x, y, r, ring);
+const COLORS = ['#ff8a7a', '#7fc4ff'];
+const SILVER = '#e8f6ff', GLOW = '#7fd0ff';
+const settings = { players: 2, levels: ['easy', 'hard'] };
+
+function refreshMenu() {
+  document.querySelectorAll('[data-players]').forEach(b => b.classList.toggle('on', +b.dataset.players === settings.players));
+  document.querySelectorAll('[data-level]').forEach(b => b.classList.toggle('on', settings.levels[b.dataset.side] === b.dataset.level));
+  $('#lvl1').classList.toggle('hidden', settings.players === 1);
+  $('#lvl0name').textContent = settings.players === 1 ? 'Level' : 'Left player';
+}
+document.querySelectorAll('[data-players]').forEach(b => b.onclick = () => { settings.players = +b.dataset.players; refreshMenu(); });
+document.querySelectorAll('[data-level]').forEach(b => b.onclick = () => { settings.levels[b.dataset.side] = b.dataset.level; refreshMenu(); });
+refreshMenu();
+
+// ---------- sound ----------
+let ac;
+function tone(type, f1, f2, dur, vol, delay = 0) {
+  const t = ac.currentTime + delay, o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.connect(g); g.connect(ac.destination);
+  o.frequency.setValueAtTime(f1, t); o.frequency.exponentialRampToValueAtTime(f2, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function sfx(kind) {
+  if (!ac) return;
+  if (kind === 'cast') { tone('sine', 400, 1600, 0.35, 0.12); tone('triangle', 800, 2400, 0.3, 0.06, 0.05); } // whoosh up
+  if (kind === 'chime') [1319, 1568, 1976, 2637].forEach((f, i) => tone('sine', f, f, 0.35, 0.18, i * 0.06));
+  if (kind === 'big') [988, 1319, 1568, 1976, 2349, 2637, 3136].forEach((f, i) => tone('sine', f, f, 0.4, 0.2, i * 0.06));
+  if (kind === 'away') tone('sine', 520, 300, 0.5, 0.08); // a Dementor floats away (Easy, no penalty)
+  if (kind === 'bad') { tone('sine', 220, 70, 0.5, 0.35); tone('triangle', 160, 60, 0.4, 0.12); }
+  if (kind === 'beep') tone('square', 600, 600, 0.12, 0.15);
+  if (kind === 'go') tone('square', 900, 900, 0.3, 0.15);
+  if (kind === 'end') // trumpet fanfare
+    [[523, 0, .15], [523, .18, .15], [523, .36, .15], [698, .54, .35], [880, .92, .2], [784, 1.12, .2], [1047, 1.32, .9]]
+      .forEach(([f, d, len]) => { tone('sawtooth', f, f, len, 0.12, d); tone('triangle', f, f, len, 0.25, d); });
+}
+
+// ---------- background music (made by code: a soft, mysterious waltz in E minor, 3 beats per bar) ----------
+const MELODY = [71, 76, 79,  78, 76, 83,  81, 78, 75,  76, 79, 78,
+                71, 76, 79,  78, 76, 86,  85, 84, 80,  84, 83, 76];
+const ROOTS = [40, 36, 45, 47], STEP = 60 / 140;
+let musicOn = true, musicTimer = null, musicStep = 0, nextNote = 0, musicGain = null;
+const midi = m => 440 * 2 ** ((m - 69) / 12);
+function note(freq, t, dur, type, vol) {
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.frequency.value = freq; o.connect(g); g.connect(musicGain);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function playStep(i, t) {
+  const m = MELODY[i % 24], beat = i % 3, root = ROOTS[Math.floor(i / 3) % 4];
+  note(midi(m), t, 1.0, 'sine', 0.45); note(midi(m + 12), t, 0.35, 'sine', 0.15); // bell sound
+  if (beat === 0) note(midi(root), t, STEP * 2.5, 'triangle', 0.6);
+  else note(midi(root + 12 + (beat === 1 ? 7 : 12)), t, STEP * 0.8, 'triangle', 0.25);
+}
+// Real music files from Iker (shared/music/, not in git). If a file can't play, the code waltz plays instead.
+const gameSong = new Audio('../../shared/music/game.mp3'), winnerSong = new Audio('../../shared/music/winner.mp3');
+gameSong.loop = true; gameSong.volume = 0.5; winnerSong.volume = 0.7;
+let winnerTimer = null;
+function startMusic() {
+  if (!musicOn) return;
+  stopWinnerSong();
+  gameSong.currentTime = 0;
+  gameSong.play().catch(startSynth);
+}
+function stopMusic() { gameSong.pause(); stopSynth(); }
+function playWinnerSong() {
+  if (!musicOn) return;
+  winnerTimer = setTimeout(() => { winnerSong.currentTime = 0; winnerSong.play().catch(() => {}); }, 2200); // after the trumpet
+}
+function stopWinnerSong() { clearTimeout(winnerTimer); winnerSong.pause(); }
+function startSynth() {
+  if (!ac || !musicOn || musicTimer) return;
+  musicGain = ac.createGain(); musicGain.gain.value = 0.12; musicGain.connect(ac.destination);
+  musicStep = 0; nextNote = ac.currentTime + 0.05;
+  musicTimer = setInterval(() => {
+    while (nextNote < ac.currentTime + 0.12) { playStep(musicStep++, nextNote); nextNote += STEP; }
+  }, 25);
+}
+function stopSynth() {
+  if (!musicTimer) return;
+  clearInterval(musicTimer); musicTimer = null;
+  musicGain.gain.setTargetAtTime(0, ac.currentTime, 0.1);
+}
+
+// ---------- camera + body tracking ----------
+let poses = [];
+const status = t => $('#status').textContent = t;
+const setup = () => startTracking(status);
+const track = now => { poses = trackPoses(now); };
+
+// Camera is mirrored, so x is flipped. Video is stretched to fill the screen.
+const sx = lm => (1 - lm.x) * W, sy = lm => lm.y * H;
+
+// ---------- game state ----------
+let state = 'menu', timeLeft = 0, countdown = 0, zones = [], particles = [], texts = [], mouse = null;
+
+function makeZones() {
+  zones = [];
+  for (let i = 0; i < settings.players; i++)
+    zones.push({ i, level: LEVELS[settings.levels[i]], face: FACES[settings.levels[i]], score: 0, dems: [], pats: [],
+      spawnT: 0.3, color: COLORS[i], hands: [], flicker: 0 });
+}
+const zoneX = z => { const w = W / zones.length; return [z.i * w, (z.i + 1) * w]; };
+const castleLine = () => H * 0.8; // a Dementor that gets this low has reached the castle
+
+function assignHands() {
+  zones.forEach(z => z.hands = []);
+  for (const p of poses) {
+    const z = zones.length === 1 ? zones[0] : zones[sx(p[0]) < W / 2 ? 0 : 1];
+    for (const [wrist, finger] of [[16, 20]]) { // right hand only (16 = right wrist, 20 = right finger)
+      if ((p[wrist].visibility ?? 1) < 0.3) continue;
+      const f = (p[finger].visibility ?? 1) > 0.3 ? p[finger] : p[wrist];
+      z.hands.push({ x: sx(f), y: sy(f) });
+    }
+  }
+  if (mouse) {
+    const z = zones.length === 1 ? zones[0] : zones[mouse.x < W / 2 ? 0 : 1];
+    z.hands.push(mouse);
+  }
+}
+
+function spawn(z) {
+  const L = z.level, [x0, x1] = zoneX(z);
+  if (z.dems.filter(d => d.st === 'fly').length >= L.max) return;
+  const big = Math.random() < L.big;
+  const r = rand(L.rMin, L.rMax) * S * (big ? 1.45 : 1);
+  // pick a spot that is not right on top of another new Dementor
+  let x = 0;
+  for (let k = 0; k < 8; k++) {
+    x = rand(x0 + r * 1.3, x1 - r * 1.3);
+    if (!z.dems.some(d => d.y < r * 3 && Math.abs(d.x - x) < r * 2.2)) break;
+  }
+  const v = rand(L.vMin, L.vMax) * S * (big ? 0.8 : 1);
+  const vx = Math.random() < L.side ? rand(40, 75) * S * (Math.random() < 0.5 ? -1 : 1) : 0;
+  z.dems.push({ x, y: -r * 1.2, r, vx, vy: v, big, need: L.hold * (big ? 2 : 1), hold: 0, age: 0,
+    ph: rand(0, 6.28), st: 'fly', a: 1, rot: 0, blink: rand(2, 5) });
+}
+
+// Hold the wand on a Dementor: the ring fills. Full ring = cast the Patronus.
+function cast(z, d, h) {
+  d.st = 'locked'; d.hold = d.need;
+  const kind = Math.random() < 0.7 ? 'stag' : 'hare';
+  // it leaps out of the wand in a big curve (down and to the side), then charges up into the Dementor
+  const [x0, x1] = zoneX(z), side = h.x < (x0 + x1) / 2 ? 1 : -1;
+  const cxp = Math.min(x1 - 60 * S, Math.max(x0 + 60 * S, h.x + side * 300 * S)), cyp = Math.min(H * 0.85, h.y + 260 * S);
+  z.pats.push({ x: h.x, y: h.y, sx: h.x, sy: h.y, cx: cxp, cy: cyp, d, t: 0, dur: 0.75, kind, dir: side, after: 0, a: 1, grow: 0 });
+  texts.push({ x: h.x, y: h.y - 50 * S, t: 'Expecto Patronum!', life: 1.4, col: SILVER, size: 40 });
+  sfx('cast');
+  for (let k = 0; k < 18; k++) {
+    const a = rand(0, 6.28), v = rand(100, 300) * S;
+    particles.push({ x: h.x, y: h.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0.6, col: k % 2 ? SILVER : GLOW, r: rand(3, 6), g: 0 });
+  }
+}
+
+function banish(z, d, p) {
+  d.st = 'hit'; d.t = 0;
+  d.vx = p.dir * 420 * S; d.vy = -380 * S; d.spin = p.dir * 9;
+  const pts = d.big ? 3 : 1;
+  if (state === 'play') z.score += pts; // no points after the round ended (the end screen is already shown)
+  sfx(d.big ? 'big' : 'chime');
+  for (let k = 0; k < (d.big ? 30 : 18); k++) {
+    const a = rand(0, 6.28), v = rand(150, 450) * S;
+    particles.push({ x: d.x, y: d.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0.7, col: k % 3 ? SILVER : GLOW, r: rand(3, 7), g: 100 });
+  }
+  texts.push({ x: d.x, y: d.y, t: '+' + pts, life: 0.9, col: d.big ? '#ffe680' : SILVER, size: d.big ? 70 : 54 });
+}
+
+function startGame() {
+  if (!ac) ac = new AudioContext();
+  ac.resume();
+  stopMusic(); startMusic();
+  makeZones(); particles = []; texts = [];
+  $('#menu').classList.add('hidden'); $('#end').classList.add('hidden');
+  state = 'count'; countdown = 3.99; lastBeep = 4;
+}
+let lastBeep = 4;
+
+function endGame() {
+  state = 'end'; stopMusic(); sfx('end'); playWinnerSong();
+  const best = Math.max(...zones.map(z => z.score)), winners = zones.filter(z => z.score === best);
+  $('#endTitle').textContent = zones.length === 1 ? `${zones[0].face.name}, Patronus Master!`
+    : winners.length === 2 ? 'A tie! Two Patronus Masters!' : `${winners[0].face.name} saves the castle!`;
+  $('#trophy').innerHTML = winners.map(z => `<div class="cup">${CUP}<div class="cupface">${faceImg(z.face, '#fff6c8')}</div></div>`).join('');
+  const lines = zones.map(z => `<span style="color:${z.color}">${faceImg(z.face, z.color)} ${z.face.name} (${z.level.name}): <b>${z.score}</b> points</span>`);
+  $('#result').innerHTML = lines.join('<br>');
+  $('#end').classList.remove('hidden');
+}
+const CUP = `<svg viewBox="0 0 200 240"><defs><linearGradient id="gold" x1="0" x2="1">
+  <stop offset="0" stop-color="#8a5a00"/><stop offset=".35" stop-color="#fff1b0"/><stop offset=".6" stop-color="#f5c542"/>
+  <stop offset="1" stop-color="#8a5a00"/></linearGradient></defs>
+  <path d="M48 35 C5 35 5 105 62 112" fill="none" stroke="url(#gold)" stroke-width="12"/>
+  <path d="M152 35 C195 35 195 105 138 112" fill="none" stroke="url(#gold)" stroke-width="12"/>
+  <path d="M38 20 H162 C162 105 132 135 100 140 C68 135 38 105 38 20Z" fill="url(#gold)"/>
+  <rect x="90" y="138" width="20" height="38" fill="url(#gold)"/>
+  <path d="M62 176 H138 L150 202 H50Z" fill="url(#gold)"/>
+  <rect x="36" y="202" width="128" height="30" rx="5" fill="#1d3b78" stroke="#f5c542" stroke-width="3"/>
+  <text x="100" y="223" text-anchor="middle" font-family="Cinzel, Georgia, serif" font-weight="800" font-size="17"
+    fill="#f7e7b0">⚡ CHAMPION ⚡</text></svg>`;
+const faceImg = kidImg;
+function toMenu() {
+  state = 'menu'; zones = []; stopMusic(); stopWinnerSong();
+  $('#end').classList.add('hidden'); $('#menu').classList.remove('hidden');
+}
+
+$('#start').onclick = startGame;
+document.querySelector('.again').onclick = startGame;
+$('#toMenu').onclick = toMenu;
+addEventListener('keydown', e => {
+  if (e.code === 'Space' && state !== 'play' && state !== 'count') startGame();
+  if (e.code === 'Escape') toMenu();
+  if (e.code === 'KeyH') location.href = '../../';
+  if (e.code === 'KeyM') { musicOn = !musicOn; if (musicOn && (state === 'play' || state === 'count')) startMusic(); else { stopMusic(); stopWinnerSong(); } }
+  if (e.code === 'KeyF') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+});
+addEventListener('mousemove', e => mouse = { x: e.clientX, y: e.clientY });
+document.addEventListener('mouseleave', () => mouse = null);
+
+// ---------- update ----------
+function update(dt) {
+  if (state === 'count') {
+    countdown -= dt;
+    const n = Math.ceil(countdown);
+    if (n < lastBeep) { lastBeep = n; sfx(n > 0 ? 'beep' : 'go'); }
+    if (countdown <= 0) { state = 'play'; timeLeft = ROUND; }
+  } else if (state === 'play') {
+    timeLeft -= dt;
+    if (timeLeft <= 0) { timeLeft = 0; endGame(); }
+  }
+  if (zones.length) assignHands();
+
+  for (const z of zones) {
+    const [x0, x1] = zoneX(z), L = z.level;
+    z.flicker = Math.max(0, z.flicker - dt);
+    if (state === 'play') {
+      z.spawnT -= dt;
+      if (z.spawnT <= 0) { spawn(z); z.spawnT = L.every * rand(0.7, 1.3); }
+    }
+    // which Dementor is each wand pointing at? (the nearest one under the wand)
+    const aimed = new Set();
+    if (state === 'play') for (const h of z.hands) {
+      let best = null, bd = 1e9;
+      for (const d of z.dems) {
+        if (d.st !== 'fly') continue;
+        const dist = Math.hypot(h.x - d.x, h.y - d.y);
+        if (dist < d.r * 1.15 + HAND_R * S * 0.6 && dist < bd) { best = d; bd = dist; }
+      }
+      if (best) { aimed.add(best); best.hand = h; }
+    }
+    for (const d of z.dems) {
+      d.age += dt;
+      if (d.st === 'fly') {
+        if (aimed.has(d)) {
+          d.hold += dt;
+          if (d.hold >= d.need) cast(z, d, d.hand);
+        } else d.hold = Math.max(0, d.hold - dt * 1.5); // the ring empties slowly, so a shaky hand is OK
+        if (d.st !== 'fly') continue;
+        // drift slowly down, swaying a little. Never toward the wand.
+        const slow = d.hold > 0 ? 0.35 : 1; // the wand light slows it down
+        d.x += (d.vx + Math.sin(d.age * 1.3 + d.ph) * 18 * S) * dt * slow;
+        d.y += d.vy * dt * slow;
+        if (d.x < x0 + d.r) d.vx = Math.abs(d.vx);
+        if (d.x > x1 - d.r) d.vx = -Math.abs(d.vx);
+        d.x = Math.min(x1 - d.r * 0.9, Math.max(x0 + d.r * 0.9, d.x));
+        if (state !== 'play') { d.st = 'away'; continue; }
+        if (d.y > castleLine()) { // reached the castle
+          d.st = 'away';
+          if (L.miss) { z.score = Math.max(0, z.score - L.miss); z.flicker = 0.8; sfx('bad');
+            texts.push({ x: d.x, y: d.y - d.r, t: '-' + L.miss, life: 0.9, col: '#ff7a7a', size: 54 }); }
+          else sfx('away');
+        }
+      } else if (d.st === 'locked') { // waiting for the Patronus, shivering
+        d.x += Math.sin(d.age * 60) * 1.5 * S;
+      } else if (d.st === 'hit') { // spins away and fades
+        d.t += dt; d.rot += d.spin * dt; d.x += d.vx * dt; d.y += d.vy * dt; d.a = Math.max(0, 1 - d.t / 0.8);
+      } else if (d.st === 'away') { // floats away up and fades (no points)
+        d.vy -= 300 * S * dt; d.y += d.vy * dt; d.a = Math.max(0, d.a - dt * 1.2);
+      }
+    }
+    z.dems = z.dems.filter(d => d.a > 0 && d.y > -d.r * 4);
+
+    for (const p of z.pats) { // Patronus charges from the wand to the Dementor
+      if (p.d.st === 'locked') {
+        p.t += dt;
+        const k = Math.min(1, p.t / p.dur), e = k * (2 - k), m = 1 - e; // fast start, then a curve into the Dementor
+        const nx = m * m * p.sx + 2 * m * e * p.cx + e * e * p.d.x, ny = m * m * p.sy + 2 * m * e * p.cy + e * e * p.d.y;
+        if (Math.abs(nx - p.x) > 0.5) p.dir = nx > p.x ? 1 : -1;
+        p.x = nx; p.y = ny; p.grow = Math.min(1, p.t / 0.2);
+        if (k >= 1) banish(z, p.d, p);
+      } else { // keeps running past, then fades
+        p.after += dt; p.x += p.dir * 600 * S * dt; p.y -= 200 * S * dt; p.a = Math.max(0, 1 - p.after / 0.6);
+      }
+      if (Math.random() < 0.8) particles.push({ x: p.x - p.dir * rand(20, 50) * S, y: p.y + rand(-20, 20) * S,
+        vx: -p.dir * rand(20, 80) * S, vy: rand(-30, 30) * S, life: 0.5, col: Math.random() < 0.5 ? SILVER : GLOW, r: rand(2, 5), g: 0 });
+    }
+    z.pats = z.pats.filter(p => p.a > 0);
+
+    for (const h of z.hands) // magic sparkles from the wand
+      if (Math.random() < 0.6) particles.push({ x: h.x + rand(-10, 10) * S, y: h.y + rand(-10, 10) * S, vx: rand(-60, 60) * S, vy: rand(-60, 20) * S,
+        life: 0.5, col: Math.random() < 0.5 ? SILVER : z.color, r: rand(2, 5) });
+  }
+  if (state === 'end' && Math.random() < 0.6) // golden confetti for the champion
+    particles.push({ x: rand(0, W), y: -10, vx: rand(-40, 40) * S, vy: rand(50, 150) * S, life: 3,
+      col: ['#f7c843', '#fff1b0', '#7fd0ff', '#ffffff'][Math.floor(rand(0, 4))], r: rand(3, 7), g: 20 });
+  for (const p of particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += (p.g ?? 500) * S * dt; p.life -= dt; }
+  particles = particles.filter(p => p.life > 0);
+  for (const t of texts) { t.y -= 70 * S * dt; t.life -= dt; }
+  texts = texts.filter(t => t.life > 0);
+}
+
+// ---------- draw helpers ----------
+// A soft round glow, drawn once and reused (cheaper than shadowBlur on the Intel Mac)
+function glowSprite(inner, outer) {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d'), gr = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  gr.addColorStop(0, inner); gr.addColorStop(0.4, outer); gr.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = gr; g.fillRect(0, 0, 128, 128); return c;
+}
+const BLUE_GLOW = glowSprite('rgba(220,245,255,.9)', 'rgba(127,208,255,.35)');
+const GOLD_GLOW = glowSprite('rgba(255,220,140,.55)', 'rgba(255,190,90,.18)');
+const RED_GLOW = glowSprite('rgba(255,90,90,.6)', 'rgba(255,60,60,.2)');
+const MIST = glowSprite('rgba(170,185,215,.22)', 'rgba(150,165,200,.1)');
+const glow = (img, x, y, r, a = 1) => { ctx.globalAlpha = a; ctx.drawImage(img, x - r, y - r, r * 2, r * 2); ctx.globalAlpha = 1; };
+
+// Dementor: a cute-spooky floating cloak with a hood, round glowing eyes and a ragged, waving bottom edge.
+function drawDementor(d, t) {
+  const r = d.r;
+  ctx.save(); ctx.translate(d.x, d.y + Math.sin(t * 2 + d.ph) * 4 * S); ctx.rotate(d.rot);
+  ctx.globalAlpha = d.a;
+  if (d.big) glow(MIST, 0, 0, r * 2.2, d.a);
+  ctx.globalAlpha = d.a;
+  // little ragged sleeves waving
+  ctx.fillStyle = d.big ? '#2b1f45' : '#1f1b33';
+  for (const s of [-1, 1]) {
+    const w = Math.sin(t * 3 + d.ph + s) * 0.15 * r;
+    ctx.beginPath(); ctx.moveTo(s * r * 0.45, -r * 0.15);
+    ctx.quadraticCurveTo(s * r * 1.05, -r * 0.05 + w, s * r * 1.15, r * 0.35 + w);
+    ctx.lineTo(s * r * 0.95, r * 0.22 + w); ctx.lineTo(s * r * 0.9, r * 0.4 + w);
+    ctx.quadraticCurveTo(s * r * 0.7, r * 0.15, s * r * 0.5, r * 0.3); ctx.closePath(); ctx.fill();
+  }
+  // cloak body with a wavy, ragged bottom
+  const g = ctx.createLinearGradient(0, -r, 0, r * 1.1);
+  g.addColorStop(0, d.big ? '#4a3a70' : '#3a3556'); g.addColorStop(0.6, d.big ? '#241a3c' : '#1c1930'); g.addColorStop(1, 'rgba(15,12,28,.55)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(0, -r);
+  ctx.bezierCurveTo(r * 0.55, -r, r * 0.7, -r * 0.55, r * 0.66, -r * 0.15);
+  ctx.quadraticCurveTo(r * 0.75, r * 0.4, r * 0.85, r * 0.85);
+  const N = 7;
+  for (let k = 0; k <= N; k++) { // zig-zag tatters that wave
+    const x = r * 0.85 - (k / N) * r * 1.7;
+    const y = r * (k % 2 ? 0.75 : 1.05) + Math.sin(t * 4 + k * 1.3 + d.ph) * r * 0.1;
+    ctx.lineTo(x, y);
+  }
+  ctx.quadraticCurveTo(-r * 0.75, r * 0.4, -r * 0.66, -r * 0.15);
+  ctx.bezierCurveTo(-r * 0.7, -r * 0.55, -r * 0.55, -r, 0, -r);
+  ctx.fill();
+  ctx.strokeStyle = d.big ? 'rgba(190,160,255,.5)' : 'rgba(150,145,200,.4)'; ctx.lineWidth = 2 * S; ctx.stroke();
+  // hood opening
+  ctx.fillStyle = '#05040c';
+  ctx.beginPath(); ctx.ellipse(0, -r * 0.38, r * 0.4, r * 0.34, 0, 0, 7); ctx.fill();
+  // big round eyes (cute, not scary) that blink
+  const blink = ((d.age + d.blink) % 4) < 0.12 ? 0.15 : 1;
+  ctx.fillStyle = d.big ? '#ffe680' : '#bfe6ff';
+  for (const s of [-1, 1]) { ctx.beginPath(); ctx.ellipse(s * r * 0.15, -r * 0.4, r * 0.085, r * 0.1 * blink, 0, 0, 7); ctx.fill(); }
+  ctx.fillStyle = '#fff';
+  for (const s of [-1, 1]) { ctx.beginPath(); ctx.arc(s * r * 0.15 + r * 0.03, -r * 0.44, r * 0.03 * blink, 0, 7); ctx.fill(); }
+  ctx.restore();
+  if (d.big && d.st === 'fly') { // tell the big sister it is worth 3
+    ctx.fillStyle = '#ffe680'; ctx.font = `800 ${26 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('+3', d.x, d.y - r * 1.35);
+  }
+}
+
+// the silver-blue ring that fills while the wand is held on a Dementor
+function drawRing(d) {
+  if (d.hold <= 0 || d.st !== 'fly') return;
+  const R = d.r * 1.25, k = Math.min(1, d.hold / d.need);
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = 'rgba(127,208,255,.25)'; ctx.lineWidth = 10 * S;
+  ctx.beginPath(); ctx.arc(d.x, d.y, R, 0, 7); ctx.stroke();
+  glow(BLUE_GLOW, d.x + Math.cos(-Math.PI / 2 + k * 6.283) * R, d.y + Math.sin(-Math.PI / 2 + k * 6.283) * R, 26 * S);
+  ctx.strokeStyle = SILVER; ctx.lineWidth = 10 * S;
+  ctx.beginPath(); ctx.arc(d.x, d.y, R, -Math.PI / 2, -Math.PI / 2 + k * Math.PI * 2); ctx.stroke();
+  ctx.lineCap = 'butt';
+}
+
+// Patronus: a stag or a hare made of light, galloping
+function drawPatronus(p, t) {
+  const u = 82 * S * (0.4 + 0.6 * (p.grow ?? 1)), run = Math.sin(t * 22);
+  glow(BLUE_GLOW, p.x, p.y, u * 2.1, p.a * 0.9);
+  ctx.save(); ctx.translate(p.x, p.y); ctx.scale(p.dir * u, u);
+  ctx.globalAlpha = p.a;
+  ctx.shadowColor = GLOW; ctx.shadowBlur = 22 * S;
+  ctx.fillStyle = SILVER; ctx.strokeStyle = SILVER; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  if (p.kind === 'stag') {
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 0.55, 0.24, -0.05, 0, 7); // body
+    ctx.moveTo(0.3, -0.12); ctx.lineTo(0.58, -0.5); ctx.lineTo(0.74, -0.44); ctx.lineTo(0.5, 0.05); // neck
+    ctx.moveTo(0.92, -0.38); ctx.ellipse(0.74, -0.46, 0.18, 0.09, 0.35, 0, 7); // head
+    ctx.moveTo(-0.5, -0.1); ctx.lineTo(-0.72, -0.25); ctx.lineTo(-0.58, -0.02); // tail
+    ctx.fill();
+    ctx.lineWidth = 0.08; ctx.beginPath();
+    // legs (gallop)
+    ctx.moveTo(0.35, 0.12); ctx.lineTo(0.55 + run * 0.15, 0.58);
+    ctx.moveTo(0.28, 0.14); ctx.lineTo(0.18 - run * 0.15, 0.58);
+    ctx.moveTo(-0.35, 0.12); ctx.lineTo(-0.6 - run * 0.15, 0.52);
+    ctx.moveTo(-0.28, 0.14); ctx.lineTo(-0.1 + run * 0.15, 0.58);
+    ctx.stroke();
+    ctx.lineWidth = 0.05; ctx.beginPath();
+    // antlers
+    ctx.moveTo(0.66, -0.52); ctx.lineTo(0.55, -0.95); ctx.lineTo(0.38, -1.15);
+    ctx.moveTo(0.58, -0.85); ctx.lineTo(0.75, -1.05);
+    ctx.moveTo(0.52, -0.98); ctx.lineTo(0.48, -1.2);
+    ctx.moveTo(0.62, -0.7); ctx.lineTo(0.42, -0.82);
+    ctx.moveTo(0.74, -0.55); ctx.lineTo(0.78, -0.92); ctx.lineTo(0.95, -1.1);
+    ctx.moveTo(0.78, -0.8); ctx.lineTo(0.95, -0.85);
+    ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0.62, -0.5); ctx.lineTo(0.52, -0.62); ctx.lineTo(0.68, -0.55); ctx.fill(); // ear
+  } else {
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 0.45, 0.28, -0.15, 0, 7); // body
+    ctx.moveTo(0.68, -0.28); ctx.arc(0.5, -0.28, 0.18, 0, 7); // head
+    ctx.moveTo(-0.42, -0.12); ctx.arc(-0.48, -0.1, 0.1, 0, 7); // fluffy tail
+    ctx.fill();
+    ctx.save(); ctx.translate(0.42, -0.42); ctx.rotate(-0.5 + run * 0.08); // long ears
+    ctx.beginPath(); ctx.ellipse(0, -0.3, 0.07, 0.3, 0, 0, 7); ctx.fill(); ctx.restore();
+    ctx.save(); ctx.translate(0.5, -0.42); ctx.rotate(-0.2 - run * 0.08);
+    ctx.beginPath(); ctx.ellipse(0, -0.3, 0.07, 0.3, 0, 0, 7); ctx.fill(); ctx.restore();
+    ctx.lineWidth = 0.1; ctx.beginPath();
+    ctx.moveTo(0.25, 0.15); ctx.lineTo(0.5 + run * 0.15, 0.45);
+    ctx.moveTo(-0.25, 0.15); ctx.lineTo(-0.6 - run * 0.2, 0.4);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// castle at the bottom of each half: dark towers, warm windows, a golden glow (red when hit)
+function drawCastle(z, t) {
+  const [x0, x1] = zoneX(z), cx = (x0 + x1) / 2, base = H * 0.92;
+  const w = Math.min((x1 - x0) * 0.46, H * 0.5), u = w / 10, v = u * 0.62; // v = height unit (low castle, so kids stay visible)
+  const hit = z.flicker > 0 && Math.sin(z.flicker * 40) > 0;
+  glow(hit ? RED_GLOW : GOLD_GLOW, cx, base - v * 3, w * 0.7);
+  ctx.fillStyle = hit ? 'rgba(60,10,20,.85)' : 'rgba(14,12,34,.8)';
+  // [center x, top y, width] in castle units
+  const towers = [[-4.2, 3.2, 1.2], [-2.6, 4.6, 1.4], [-0.9, 3.4, 1.8], [0.9, 6, 1.5], [2.7, 4.2, 1.3], [4.3, 2.8, 1.1]];
+  ctx.beginPath();
+  ctx.rect(cx - 5 * u, base - 2.2 * v, 10 * u, 2.2 * v);
+  for (const [tx, th, tw] of towers) {
+    const x = cx + tx * u, y = base - th * v;
+    ctx.rect(x - tw * u / 2, y, tw * u, th * v);
+    ctx.moveTo(x - tw * u * 0.65, y); ctx.lineTo(x, y - tw * u * 1.1); ctx.lineTo(x + tw * u * 0.65, y); ctx.closePath();
+  }
+  ctx.fill();
+  // windows (they flicker a little, like candles)
+  ctx.fillStyle = hit ? 'rgba(255,90,90,.9)' : 'rgba(255,205,110,.9)';
+  for (const [tx, th, tw] of towers) {
+    ctx.globalAlpha = 0.75 + 0.25 * Math.sin(t * 5 + tx * 3);
+    ctx.fillRect(cx + tx * u - u * 0.18, base - th * v * 0.7, u * 0.36, u * 0.5);
+  }
+  ctx.globalAlpha = 1;
+  // a little reflection in the lake
+  ctx.fillStyle = hit ? 'rgba(255,90,90,.25)' : 'rgba(255,205,110,.22)';
+  for (let k = 0; k < 4; k++) {
+    const yy = base + (k + 0.6) * H * 0.016, ww = w * (0.5 - k * 0.09) * (1 + 0.08 * Math.sin(t * 2 + k));
+    ctx.fillRect(cx - ww / 2, yy, ww, 2 * S);
+  }
+}
+
+// ---------- background: drawn once into a picture, then copied every frame ----------
+let BG;
+const stars = Array.from({ length: 110 }, () => ({ x: Math.random(), y: Math.random() * 0.6, r: rand(0.6, 2), p: rand(0, 6.28) }));
+const mists = Array.from({ length: 7 }, (_, i) => ({ x: Math.random(), y: 0.35 + (i % 4) * 0.13, w: rand(0.25, 0.45), v: rand(0.006, 0.018) * (i % 2 ? 1 : -1) }));
+function makeBackground() {
+  BG = document.createElement('canvas'); BG.width = W; BG.height = H;
+  const b = BG.getContext('2d');
+  const sky = b.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, 'rgba(5,10,35,.9)'); sky.addColorStop(.55, 'rgba(20,30,70,.5)'); sky.addColorStop(.85, 'rgba(25,35,70,.45)');
+  sky.addColorStop(.92, 'rgba(10,20,50,.7)'); sky.addColorStop(1, 'rgba(5,10,30,.85)');
+  b.fillStyle = sky; b.fillRect(0, 0, W, H);
+  // moon with a soft glow (drawn once, so shadowBlur here is fine)
+  const mx = W * 0.5, my = 200 * S; // below the score, so they do not overlap
+  const mg = b.createRadialGradient(mx, my, 30 * S, mx, my, 160 * S);
+  mg.addColorStop(0, 'rgba(220,235,255,.35)'); mg.addColorStop(1, 'rgba(220,235,255,0)');
+  b.fillStyle = mg; b.fillRect(mx - 160 * S, my - 160 * S, 320 * S, 320 * S);
+  b.fillStyle = '#eef4ff'; b.beginPath(); b.arc(mx, my, 38 * S, 0, 7); b.fill();
+  b.fillStyle = 'rgba(170,185,215,.45)';
+  for (const [dx, dy, rr] of [[-12, -8, 8], [10, 6, 6], [-4, 14, 5], [14, -14, 4]]) { b.beginPath(); b.arc(mx + dx * S, my + dy * S, rr * S, 0, 7); b.fill(); }
+  // far hills
+  b.fillStyle = 'rgba(8,10,28,.75)';
+  b.beginPath(); b.moveTo(0, H * 0.9);
+  for (let k = 0; k <= 20; k++) b.lineTo(k / 20 * W, H * (0.86 + 0.025 * Math.sin(k * 1.7) + 0.015 * Math.sin(k * 0.6)));
+  b.lineTo(W, H * 0.92); b.lineTo(0, H * 0.92); b.fill();
+  // lake
+  const lake = b.createLinearGradient(0, H * 0.92, 0, H);
+  lake.addColorStop(0, 'rgba(30,50,100,.85)'); lake.addColorStop(1, 'rgba(8,14,40,.95)');
+  b.fillStyle = lake; b.fillRect(0, H * 0.92, W, H * 0.08);
+}
+addEventListener('resize', resize); resize();
+
+function drawSky(t) {
+  ctx.drawImage(BG, 0, 0, W, H);
+  ctx.fillStyle = '#fff';
+  for (const st of stars) {
+    ctx.globalAlpha = 0.3 + 0.6 * Math.abs(Math.sin(t * 1.3 + st.p));
+    ctx.fillRect(st.x * W, st.y * H, st.r * S * 1.6, st.r * S * 1.6);
+  }
+  ctx.globalAlpha = 1;
+  // moon shine on the lake
+  ctx.fillStyle = 'rgba(220,235,255,.35)';
+  for (let k = 0; k < 5; k++) {
+    const ww = (60 - k * 9) * S * (1 + 0.2 * Math.sin(t * 1.5 + k * 2));
+    ctx.fillRect(W * 0.5 - ww / 2, H * (0.935 + k * 0.012), ww, 2 * S);
+  }
+}
+function drawMist(t) {
+  for (const m of mists) {
+    const x = (((m.x + t * m.v) % 1.4) + 1.4) % 1.4 - 0.2;
+    ctx.globalAlpha = 0.8;
+    ctx.drawImage(MIST, x * W - m.w * W / 2, m.y * H - m.w * H * 0.12, m.w * W, m.w * H * 0.24);
+  }
+  ctx.globalAlpha = 1;
+}
+function starPath(R, r) {
+  ctx.beginPath();
+  for (let k = 0; k < 10; k++) { const a = k * Math.PI / 5 - Math.PI / 2, rr = k % 2 ? r : R; ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); }
+  ctx.closePath();
+}
+
+function draw() {
+  const t = performance.now() / 1000;
+  // camera picture, mirrored, under a night sky
+  ctx.fillStyle = '#0a0f24'; ctx.fillRect(0, 0, W, H);
+  if (video.readyState >= 2) {
+    ctx.save(); ctx.globalAlpha = 0.5; ctx.translate(W, 0); ctx.scale(-1, 1);
+    ctx.drawImage(video, 0, 0, W, H); ctx.restore();
+  }
+  drawSky(t);
+
+  for (const z of zones) drawCastle(z, t);
+  drawMist(t);
+  for (const z of zones) {
+    const [x0, x1] = zoneX(z);
+    ctx.save(); ctx.beginPath(); ctx.rect(x0, 0, x1 - x0, H); ctx.clip();
+    for (const d of z.dems) drawDementor(d, t);
+    for (const d of z.dems) drawRing(d);
+    ctx.restore();
+    for (const p of z.pats) drawPatronus(p, t);
+    // right hand = a glowing star at the wand tip
+    for (const h of z.hands) {
+      glow(BLUE_GLOW, h.x, h.y, HAND_R * S * 1.8, 0.7);
+      ctx.save(); ctx.translate(h.x, h.y); ctx.rotate(t * 2.5);
+      ctx.fillStyle = SILVER; starPath(HAND_R * S, HAND_R * S * .45); ctx.fill();
+      ctx.lineWidth = 3 * S; ctx.strokeStyle = z.color; ctx.stroke(); ctx.restore();
+    }
+    // score
+    ctx.fillStyle = z.color; ctx.font = `800 ${70 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.fillText(z.score, (x0 + x1) / 2 + 40 * S, 18 * S);
+    drawFace(z.face, (x0 + x1) / 2 - 50 * S, 55 * S, 42 * S, z.color);
+    ctx.font = `600 ${24 * S}px "Cinzel Decorative", Georgia, serif`; ctx.fillStyle = '#fff';
+    ctx.fillText(z.face.name + ' · ' + z.level.name, (x0 + x1) / 2, 100 * S);
+  }
+  if (zones.length === 2) {
+    ctx.strokeStyle = 'rgba(191,230,255,.4)'; ctx.lineWidth = 4; ctx.setLineDash([20, 16]);
+    ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  for (const p of particles) {
+    ctx.globalAlpha = Math.min(1, Math.max(0, p.life / 0.6)); ctx.fillStyle = p.col;
+    ctx.beginPath(); ctx.arc(p.x, p.y, (p.r || 8) * S, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+  for (const t of texts) {
+    ctx.globalAlpha = Math.min(1, Math.max(0, t.life / 0.6));
+    ctx.font = `800 ${(t.size || 50) * S}px "Cinzel Decorative", Georgia, serif`;
+    const half = ctx.measureText(t.t).width / 2 + 10 * S, x = Math.min(W - half, Math.max(half, t.x)); // keep it on screen
+    ctx.lineWidth = 6 * S; ctx.strokeStyle = 'rgba(10,20,50,.85)'; ctx.strokeText(t.t, x, t.y);
+    ctx.fillStyle = t.col; ctx.fillText(t.t, x, t.y);
+  }
+  ctx.globalAlpha = 1;
+
+  ctx.fillStyle = '#fff';
+  if (state === 'play') {
+    ctx.font = `800 ${44 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillStyle = timeLeft < 10 ? '#ff6b6b' : '#fff';
+    ctx.fillText('⌛ ' + Math.ceil(timeLeft), W / 2, H - 40 * S);
+  }
+  if (state === 'count') {
+    const n = Math.ceil(countdown);
+    ctx.font = `900 ${260 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillText(n > 0 ? n : 'GO!', W / 2, H / 2);
+    ctx.font = `600 ${36 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillText(zones.length === 2 ? 'Protect your castle!' : 'Get ready, young wizard!', W / 2, H / 2 + 170 * S);
+  }
+}
+
+// ---------- main loop ----------
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  track(now); update(dt); draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+setup();
+// for automatic tests only: where is the lowest flying Dementor?
+</script>
+</body>
+</html>

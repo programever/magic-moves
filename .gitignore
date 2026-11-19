@@ -1,4 +1,4 @@
 .venv/
 shared/private/
-games/*/music/
+shared/music/
 .DS_Store

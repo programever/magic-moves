@@ -140,8 +140,8 @@ function playStep(i, t) {
   if (beat === 0) note(midi(root), t, STEP * 2.5, 'triangle', 0.6);
   else note(midi(root + 12 + (beat === 1 ? 7 : 12)), t, STEP * 0.8, 'triangle', 0.25);
 }
-// Real music files from Iker (music/). If a file can't play, the code waltz plays instead.
-const gameSong = new Audio('music/game.mp3'), winnerSong = new Audio('music/winner.mp3');
+// Real music files from Iker (shared/music/, not in git). If a file can't play, the code waltz plays instead.
+const gameSong = new Audio('../../shared/music/game.mp3'), winnerSong = new Audio('../../shared/music/winner.mp3');
 gameSong.loop = true; gameSong.volume = 0.5; winnerSong.volume = 0.7;
 let winnerTimer = null;
 function startMusic() {

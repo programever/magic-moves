@@ -1,0 +1,671 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Potion Class</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Cinzel:wght@600;800&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; height: 100%; background: #140f1c; overflow: hidden;
+    font-family: "Cinzel", Georgia, serif; color: #fff; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; }
+  video { display: none; }
+  .overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 22px; background: rgba(20, 14, 30, .86); text-align: center; }
+  .hidden { display: none !important; }
+  h1 { font-family: "Cinzel Decorative", Georgia, serif; font-size: 72px; margin: 0; color: #8cf5a0;
+    text-shadow: 0 0 25px #3dff7a88; }
+  #end { background: rgba(20, 14, 30, .55); gap: 10px; }
+  #end h1 { font-size: 44px; color: #f7c843; text-shadow: 0 0 25px #ffb30088; }
+  #trophy { display: flex; gap: 60px; }
+  .cup { position: relative; width: 170px; filter: drop-shadow(0 0 25px #ffd700);
+    animation: shine 1.2s ease-in-out infinite alternate; }
+  .cup svg { width: 170px; display: block; }
+  .cupface { position: absolute; left: 50%; top: 65px; transform: translate(-50%, -50%); }
+  .cupface img { width: 72px !important; height: 72px !important; }
+  @keyframes shine { from { transform: rotate(-4deg) scale(1); } to { transform: rotate(4deg) scale(1.07); } }
+  .row { display: flex; gap: 14px; align-items: center; font-size: 28px; }
+  .row span { width: 220px; text-align: right; }
+  button { font: inherit; font-size: 28px; padding: 12px 28px; border-radius: 40px; border: 3px solid #fff3;
+    background: #ffffff14; color: #fff; cursor: pointer; }
+  button.on { background: #f7c843; border-color: #f7c843; color: #2a1600; font-weight: 800; }
+  #start, .again { font-size: 40px; padding: 18px 60px; background: #1a5c2e; border-color: #f7c843;
+    color: #f7e7b0; font-weight: 800; }
+  .help { font-size: 22px; opacity: .8; max-width: 950px; line-height: 1.5; }
+  #status { position: fixed; bottom: 20px; left: 0; right: 0; text-align: center; font-size: 26px; }
+  #result { font-size: 28px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="menu" class="overlay">
+  <h1>🧪 Potion Class 🧪</h1>
+  <div class="row"><span>Players</span>
+    <button data-players="1">1 player</button><button data-players="2">2 players</button></div>
+  <div class="row" id="lvl0"><span id="lvl0name">Left player</span>
+    <button data-side="0" data-level="easy">Easy</button><button data-side="0" data-level="hard">Hard</button></div>
+  <div class="row" id="lvl1"><span>Right player</span>
+    <button data-side="1" data-level="easy">Easy</button><button data-side="1" data-level="hard">Hard</button></div>
+  <button id="home" onclick="location.href='../../'">🏠 All games</button>
+  <button id="start">Start ▶</button>
+  <div class="help">Step left and right to move your cauldron 🧪 Catch what the recipe card asks for!<br>
+    Right ingredient = 1 point. &nbsp; Whole recipe = BOOM! 5 more points.<br>
+    Wrong ingredient: Easy = it bounces off. Hard = minus 1.<br>
+    Keys: Space = start, Esc = menu, F = full screen, M = music, H = all games, ← → / A D = move cauldrons</div>
+</div>
+
+<div id="end" class="overlay hidden">
+  <h1 id="endTitle"></h1>
+  <div id="trophy"></div>
+  <div id="result"></div>
+  <button class="again">Play again ▶</button>
+  <button id="toMenu">Menu</button>
+</div>
+
+<div id="status"></div>
+
+<script type="module">
+import { video, startTracking, track as trackPoses } from '../../shared/tracking.js';
+import { KIDS, drawKidFace, kidImg } from '../../shared/kids.js';
+
+const $ = s => document.querySelector(s);
+const canvas = $('#c'), ctx = canvas.getContext('2d');
+const rand = (a, b) => a + Math.random() * (b - a);
+const pick = a => a[Math.floor(Math.random() * a.length)];
+const FONT = '"Cinzel Decorative", Georgia, serif';
+
+let W, H, S;
+function resize() {
+  const d = devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight; S = H / 900;
+  canvas.width = W * d; canvas.height = H * d; ctx.setTransform(d, 0, 0, d, 0, 0);
+  makeBackground();
+}
+
+// ---------- settings ----------
+const LEVELS = {
+  // every = seconds between items, r = item size, v = fall speed, need = chance the item is on the recipe,
+  // potW = half width of the cauldron, grab = extra catch room, recipe = how many ingredients
+  easy: { name: 'Easy', every: 1.5, r: 50, vMin: 95, vMax: 125, need: 0.8, potW: 125, grab: 45, recipe: [2, 2], wrong: 0 },
+  hard: { name: 'Hard', every: 0.8, r: 36, vMin: 210, vMax: 290, need: 0.45, potW: 95, grab: 10, recipe: [3, 4], wrong: -1 },
+};
+const ROUND = +new URLSearchParams(location.search).get('t') || 60; // ?t=10 = 10 second round
+const FACES = { easy: KIDS.player1, hard: KIDS.player2 }; // Easy = player 1, Hard = player 2
+const drawFace = (f, x, y, r, ring) => drawKidFace(ctx, f, x, y, r, ring);
+const COLORS = ['#ff6b5b', '#6fb4ff'];
+const settings = { players: 2, levels: ['easy', 'hard'] };
+
+const INGS = [
+  { e: '🐸', col: [76, 200, 80] }, { e: '🍄', col: [235, 60, 60] }, { e: '⭐', col: [255, 214, 79] },
+  { e: '🪶', col: [120, 190, 255] }, { e: '🌙', col: [180, 150, 255] }, { e: '💎', col: [77, 225, 240] },
+  { e: '🕷️', col: [150, 80, 220] }, { e: '🌿', col: [110, 220, 110] }, { e: '🍓', col: [255, 80, 140] },
+  { e: '🐌', col: [240, 160, 70] },
+];
+const POTIONS = ['Giggle Potion', 'Flying Potion', 'Rainbow Potion', 'Bubble Potion', 'Sleepy Potion', 'Sparkle Potion',
+  'Dragon Potion', 'Unicorn Potion', 'Hiccup Potion', 'Jumping Potion', 'Tickle Potion', 'Moonlight Potion'];
+
+function refreshMenu() {
+  document.querySelectorAll('[data-players]').forEach(b => b.classList.toggle('on', +b.dataset.players === settings.players));
+  document.querySelectorAll('[data-level]').forEach(b => b.classList.toggle('on', settings.levels[b.dataset.side] === b.dataset.level));
+  $('#lvl1').classList.toggle('hidden', settings.players === 1);
+  $('#lvl0name').textContent = settings.players === 1 ? 'Level' : 'Left player';
+}
+document.querySelectorAll('[data-players]').forEach(b => b.onclick = () => { settings.players = +b.dataset.players; refreshMenu(); });
+document.querySelectorAll('[data-level]').forEach(b => b.onclick = () => { settings.levels[b.dataset.side] = b.dataset.level; refreshMenu(); });
+refreshMenu();
+
+// ---------- sound ----------
+let ac, noiseBuf;
+function tone(type, f1, f2, dur, vol, delay = 0) {
+  const t = ac.currentTime + delay, o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.connect(g); g.connect(ac.destination);
+  o.frequency.setValueAtTime(f1, t); o.frequency.exponentialRampToValueAtTime(f2, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function noise(dur, vol, freq) {
+  if (!noiseBuf) {
+    noiseBuf = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+    const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  }
+  const s = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain(), t = ac.currentTime;
+  s.buffer = noiseBuf; f.type = 'lowpass'; f.frequency.setValueAtTime(freq, t); f.frequency.exponentialRampToValueAtTime(80, t + dur);
+  s.connect(f); f.connect(g); g.connect(ac.destination);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  s.start(t); s.stop(t + dur);
+}
+function sfx(kind) {
+  if (!ac) return;
+  if (kind === 'plop') { tone('sine', 300, 900, 0.12, 0.35); [1319, 1760].forEach((f, i) => tone('sine', f, f, 0.18, 0.18, 0.08 + i * 0.06)); }
+  if (kind === 'bloop') { tone('sine', 520, 160, 0.25, 0.35); tone('sine', 260, 520, 0.18, 0.25, 0.22); }
+  if (kind === 'bad') { tone('sawtooth', 160, 60, 0.35, 0.14); noise(0.4, 0.3, 1200); }
+  if (kind === 'boom') { noise(0.9, 0.6, 3000); tone('sine', 120, 35, 0.6, 0.6);
+    [784, 988, 1175, 1568, 1976].forEach((f, i) => tone('sine', f, f, 0.3, 0.2, 0.15 + i * 0.07)); }
+  if (kind === 'beep') tone('square', 600, 600, 0.12, 0.15);
+  if (kind === 'go') tone('square', 900, 900, 0.3, 0.15);
+  if (kind === 'end') // trumpet fanfare
+    [[523, 0, .15], [523, .18, .15], [523, .36, .15], [698, .54, .35], [880, .92, .2], [784, 1.12, .2], [1047, 1.32, .9]]
+      .forEach(([f, d, len]) => { tone('sawtooth', f, f, len, 0.12, d); tone('triangle', f, f, len, 0.25, d); });
+}
+
+// ---------- background music (made by code: a magic waltz in E minor, 3 beats per bar) ----------
+const MELODY = [76, 79, 83,  84, 83, 79,  81, 76, 72,  75, 78, 71,
+                83, 79, 76,  79, 84, 88,  84, 81, 76,  78, 75, 71];
+const ROOTS = [40, 36, 45, 47], STEP = 60 / 150;
+let musicOn = true, musicTimer = null, musicStep = 0, nextNote = 0, musicGain = null;
+const midi = m => 440 * 2 ** ((m - 69) / 12);
+function note(freq, t, dur, type, vol) {
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.frequency.value = freq; o.connect(g); g.connect(musicGain);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function playStep(i, t) {
+  const m = MELODY[i % 24], beat = i % 3, root = ROOTS[Math.floor(i / 3) % 4];
+  note(midi(m), t, 1.0, 'sine', 0.45); note(midi(m + 12), t, 0.35, 'sine', 0.15); // bell sound
+  if (beat === 0) note(midi(root), t, STEP * 2.5, 'triangle', 0.6);
+  else note(midi(root + 12 + (beat === 1 ? 7 : 12)), t, STEP * 0.8, 'triangle', 0.25);
+}
+// Real music files from Iker (shared/music/, not in git). If a file can't play, the code waltz plays instead.
+const gameSong = new Audio('../../shared/music/game.mp3'), winnerSong = new Audio('../../shared/music/winner.mp3');
+gameSong.loop = true; gameSong.volume = 0.5; winnerSong.volume = 0.7;
+let winnerTimer = null;
+function startMusic() {
+  if (!musicOn) return;
+  stopWinnerSong();
+  gameSong.currentTime = 0;
+  gameSong.play().catch(startSynth);
+}
+function stopMusic() { gameSong.pause(); stopSynth(); }
+function playWinnerSong() {
+  if (!musicOn) return;
+  winnerTimer = setTimeout(() => { winnerSong.currentTime = 0; winnerSong.play().catch(() => {}); }, 2200); // after the trumpet
+}
+function stopWinnerSong() { clearTimeout(winnerTimer); winnerSong.pause(); }
+function startSynth() {
+  if (!ac || !musicOn || musicTimer) return;
+  musicGain = ac.createGain(); musicGain.gain.value = 0.12; musicGain.connect(ac.destination);
+  musicStep = 0; nextNote = ac.currentTime + 0.05;
+  musicTimer = setInterval(() => {
+    while (nextNote < ac.currentTime + 0.12) { playStep(musicStep++, nextNote); nextNote += STEP; }
+  }, 25);
+}
+function stopSynth() {
+  if (!musicTimer) return;
+  clearInterval(musicTimer); musicTimer = null;
+  musicGain.gain.setTargetAtTime(0, ac.currentTime, 0.1);
+}
+
+// ---------- camera + body tracking ----------
+let poses = [];
+const status = t => $('#status').textContent = t;
+const setup = () => startTracking(status);
+const track = now => { poses = trackPoses(now); };
+
+// Camera is mirrored, so x is flipped. Video is stretched to fill the screen.
+const sx = lm => (1 - lm.x) * W;
+
+// ---------- emoji pictures (drawn once, then copied: much faster than text every frame) ----------
+const emojiCache = {};
+function emojiPic(e) {
+  if (!emojiCache[e]) {
+    const c = document.createElement('canvas'); c.width = c.height = 128;
+    const x = c.getContext('2d');
+    x.font = '100px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
+    x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(e, 64, 72);
+    emojiCache[e] = c;
+  }
+  return emojiCache[e];
+}
+const drawEmoji = (e, x, y, size) => ctx.drawImage(emojiPic(e), x - size / 2, y - size / 2, size, size);
+
+// ---------- game state ----------
+let state = 'menu', timeLeft = 0, countdown = 0, zones = [], particles = [], texts = [];
+const keys = {};
+
+function newRecipe(z) {
+  const [a, b] = z.level.recipe, n = a + Math.floor(Math.random() * (b - a + 1));
+  const pool = [...INGS].sort(() => Math.random() - 0.5);
+  z.recipe = pool.slice(0, n).map(ing => ({ ing, done: false }));
+  z.potion = pick(POTIONS.filter(p => p !== z.potion));
+  z.cardPop = 0.6;
+}
+function makeZones() {
+  zones = [];
+  for (let i = 0; i < settings.players; i++) {
+    const z = { i, level: LEVELS[settings.levels[i]], face: FACES[settings.levels[i]], score: 0, potions: 0, items: [],
+      spawnT: 0.3, color: COLORS[i], shake: 0, flash: 0, liquid: [90, 200, 120], liquidTo: [90, 200, 120], bubs: [], jiggle: 0 };
+    const [x0, x1] = zoneX(z); z.cx = z.target = (x0 + x1) / 2;
+    newRecipe(z);
+    zones.push(z);
+  }
+}
+const zoneX = z => { const w = W / settings.players; return [z.i * w, (z.i + 1) * w]; };
+const potW = z => z.level.potW * S;
+const mouthY = () => H - 190 * S;
+
+// The body moves the cauldron: middle of the two shoulders.
+function followBodies(dt) {
+  for (const p of poses) {
+    const z = zones.length === 1 ? zones[0] : zones[sx(p[0]) < W / 2 ? 0 : 1];
+    const a = p[11], b = p[12];
+    if ((a.visibility ?? 1) < 0.3 && (b.visibility ?? 1) < 0.3) continue;
+    z.target = (sx(a) + sx(b)) / 2;
+  }
+  // keyboard for testing: arrows = left/first cauldron, A/D = right cauldron
+  const sp = 750 * S * dt;
+  const kz = [[zones[0], 'ArrowLeft', 'ArrowRight'], [zones[1] || zones[0], 'KeyA', 'KeyD']];
+  for (const [z, l, r] of kz) { if (keys[l]) z.target -= sp; if (keys[r]) z.target += sp; }
+  for (const z of zones) {
+    const [x0, x1] = zoneX(z), m = potW(z) + 10 * S;
+    z.target = Math.min(x1 - m, Math.max(x0 + m, z.target));
+    z.cx += (z.target - z.cx) * Math.min(1, dt * 9); // smooth
+  }
+}
+
+function spawn(z) {
+  const L = z.level, [x0, x1] = zoneX(z), r = L.r * S;
+  const todo = z.recipe.filter(s => !s.done).map(s => s.ing);
+  const others = INGS.filter(g => !z.recipe.some(s => s.ing === g));
+  const ing = Math.random() < L.need && todo.length ? pick(todo) : pick(others);
+  z.items.push({ ing, x: rand(x0 + r * 1.6, x1 - r * 1.6), y: 245 * S, r, vx: 0, vy: rand(L.vMin, L.vMax) * S,
+    ph: rand(0, 6.28), age: 0, bounced: false, spin: 0 });
+  for (let k = 0; k < 8; k++) { // magic poof when it appears
+    const a = rand(0, 6.28), v = rand(40, 120) * S;
+    particles.push({ x: z.items.at(-1).x, y: 245 * S, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0.5, max: 0.5, col: '#fff1b0', r: 3, g: 0 });
+  }
+}
+
+function burst(x, y, n, cols, speed, kind = 'dot', life = 0.8) {
+  for (let k = 0; k < n; k++) {
+    const a = rand(0, 6.28), v = rand(speed * .3, speed) * S;
+    particles.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - (kind === 'star' ? 150 * S : 0), life, max: life,
+      col: pick(cols), r: kind === 'star' ? rand(7, 13) : rand(3, 7), kind, rot: rand(0, 6) });
+  }
+}
+function smoke(x, y, n, col, size) {
+  for (let k = 0; k < n; k++)
+    particles.push({ x: x + rand(-30, 30) * S, y: y + rand(-20, 10) * S, vx: rand(-60, 60) * S, vy: rand(-140, -50) * S,
+      life: 1.1, max: 1.1, col, r: rand(size * .6, size), kind: 'smoke', g: 0, grow: 40 });
+}
+const rgb = c => `rgb(${c[0] | 0},${c[1] | 0},${c[2] | 0})`;
+
+function catchItem(z, it) {
+  const slot = z.recipe.find(s => s.ing === it.ing && !s.done), my = mouthY();
+  if (slot) {
+    slot.done = true; z.score += 1; z.liquidTo = it.ing.col; z.jiggle = 0.5;
+    sfx('plop');
+    burst(it.x, my, 14, [rgb(it.ing.col), '#fff6c8'], 300);
+    texts.push({ x: it.x, y: my - 60 * S, t: '+1', life: 0.9, col: '#8cf5a0', size: 54 });
+    if (z.recipe.every(s => s.done)) { // BOOM!
+      z.score += 5; z.potions += 1; z.flash = 0.5;
+      sfx('boom');
+      const rainbow = ['#ff5b5b', '#ffb84d', '#ffe94d', '#6cff7a', '#4dd2ff', '#b06cff', '#ff6cd8', '#ffffff'];
+      burst(z.cx, my - 40 * S, 45, rainbow, 650, 'star', 1.4);
+      for (const c of rainbow.slice(0, 6)) smoke(z.cx, my - 30 * S, 2, c, 55);
+      texts.push({ x: z.cx, y: my - 200 * S, t: 'BOOM! +5', life: 1.6, col: '#ffe94d', size: 96, rainbow: true });
+      z.liquidTo = pick(INGS).col;
+      newRecipe(z);
+    }
+  } else if (z.level.wrong) { // Hard: wrong = minus 1 + green smoke
+    z.score = Math.max(0, z.score + z.level.wrong); z.shake = 0.35; z.liquidTo = [70, 120, 40];
+    sfx('bad');
+    smoke(it.x, my, 6, '#5fbf3f', 45);
+    texts.push({ x: it.x, y: my - 60 * S, t: '-1', life: 0.9, col: '#9dff6a', size: 54 });
+  }
+}
+
+function startGame() {
+  if (!ac) ac = new AudioContext();
+  ac.resume();
+  stopMusic(); startMusic();
+  makeZones(); particles = []; texts = [];
+  $('#menu').classList.add('hidden'); $('#end').classList.add('hidden');
+  state = 'count'; countdown = 3.99; lastBeep = 4;
+}
+let lastBeep = 4;
+
+function endGame() {
+  state = 'end'; stopMusic(); sfx('end'); playWinnerSong();
+  const best = Math.max(...zones.map(z => z.score)), winners = zones.filter(z => z.score === best);
+  $('#endTitle').textContent = zones.length === 1 ? `${zones[0].face.name}, Potion Master!`
+    : winners.length === 2 ? 'A tie! Two Potion Masters!' : `${winners[0].face.name} wins the Potions Cup!`;
+  $('#trophy').innerHTML = winners.map(z => `<div class="cup">${CUP}<div class="cupface">${faceImg(z.face, '#fff6c8')}</div></div>`).join('');
+  const lines = zones.map(z => `<span style="color:${z.color}">${faceImg(z.face, z.color)} ${z.face.name} (${z.level.name}): ` +
+    `<b>${z.score}</b> points · ${z.potions} 🧪</span>`);
+  $('#result').innerHTML = lines.join('<br>');
+  $('#end').classList.remove('hidden');
+}
+const CUP = `<svg viewBox="0 0 200 240"><defs><linearGradient id="gold" x1="0" x2="1">
+  <stop offset="0" stop-color="#8a5a00"/><stop offset=".35" stop-color="#fff1b0"/><stop offset=".6" stop-color="#f5c542"/>
+  <stop offset="1" stop-color="#8a5a00"/></linearGradient></defs>
+  <path d="M48 35 C5 35 5 105 62 112" fill="none" stroke="url(#gold)" stroke-width="12"/>
+  <path d="M152 35 C195 35 195 105 138 112" fill="none" stroke="url(#gold)" stroke-width="12"/>
+  <path d="M38 20 H162 C162 105 132 135 100 140 C68 135 38 105 38 20Z" fill="url(#gold)"/>
+  <rect x="90" y="138" width="20" height="38" fill="url(#gold)"/>
+  <path d="M62 176 H138 L150 202 H50Z" fill="url(#gold)"/>
+  <rect x="36" y="202" width="128" height="30" rx="5" fill="#1a5c2e" stroke="#f5c542" stroke-width="3"/>
+  <text x="100" y="223" text-anchor="middle" font-family="Cinzel, Georgia, serif" font-weight="800" font-size="17"
+    fill="#f7e7b0">⚡ CHAMPION ⚡</text></svg>`;
+const faceImg = kidImg;
+function toMenu() {
+  state = 'menu'; zones = []; stopMusic(); stopWinnerSong();
+  $('#end').classList.add('hidden'); $('#menu').classList.remove('hidden');
+}
+
+$('#start').onclick = startGame;
+document.querySelector('.again').onclick = startGame;
+$('#toMenu').onclick = toMenu;
+addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code.startsWith('Arrow')) e.preventDefault();
+  if (e.code === 'Space' && state !== 'play' && state !== 'count') startGame();
+  if (e.code === 'Escape') toMenu();
+  if (e.code === 'KeyH') location.href = '../../';
+  if (e.code === 'KeyM') { musicOn = !musicOn; if (musicOn && (state === 'play' || state === 'count')) startMusic(); else { stopMusic(); stopWinnerSong(); } }
+  if (e.code === 'KeyF') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+});
+addEventListener('keyup', e => keys[e.code] = false);
+addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+
+// ---------- update ----------
+function update(dt) {
+  if (state === 'count') {
+    countdown -= dt;
+    const n = Math.ceil(countdown);
+    if (n < lastBeep) { lastBeep = n; sfx(n > 0 ? 'beep' : 'go'); }
+    if (countdown <= 0) { state = 'play'; timeLeft = ROUND; }
+  } else if (state === 'play') {
+    timeLeft -= dt;
+    if (timeLeft <= 0) { timeLeft = 0; endGame(); }
+  }
+  if (zones.length) followBodies(dt);
+  const my = mouthY();
+
+  for (const z of zones) {
+    z.shake = Math.max(0, z.shake - dt); z.flash = Math.max(0, z.flash - dt);
+    z.jiggle = Math.max(0, z.jiggle - dt); z.cardPop = Math.max(0, z.cardPop - dt);
+    for (let k = 0; k < 3; k++) z.liquid[k] += (z.liquidTo[k] - z.liquid[k]) * Math.min(1, dt * 4);
+    if (state === 'play') {
+      z.spawnT -= dt;
+      if (z.spawnT <= 0) { spawn(z); z.spawnT = z.level.every * rand(0.75, 1.25); }
+    }
+    // bubbles in the cauldron
+    if (Math.random() < dt * (z.jiggle > 0 ? 30 : 8))
+      z.bubs.push({ x: rand(-.75, .75) * potW(z), y: 0, r: rand(5, 13) * S, life: rand(0.5, 1) });
+    for (const b of z.bubs) { b.y -= 45 * S * dt; b.life -= dt; }
+    z.bubs = z.bubs.filter(b => b.life > 0);
+
+    for (const it of z.items) {
+      it.age += dt;
+      const prevY = it.y;
+      if (state !== 'play' && state !== 'count' && !it.bounced) { it.bounced = true; it.vy = -200 * S; } // round over: float away
+      if (it.bounced) { it.vy += 900 * S * dt; it.spin += it.vx > 0 ? dt * 8 : -dt * 8; }
+      it.x += it.vx * dt; it.y += it.vy * dt;
+      if (state !== 'play' || it.bounced) continue;
+      const half = potW(z) * 0.85 + z.level.grab * S;
+      if (prevY < my && it.y >= my && Math.abs(it.x - z.cx) < half) {
+        const needed = z.recipe.some(s => s.ing === it.ing && !s.done);
+        if (!needed && !z.level.wrong) { // Easy: wrong ingredient bounces off with a funny bloop
+          it.bounced = true; it.vy = -480 * S; it.vx = (it.x < z.cx ? -1 : 1) * 260 * S;
+          sfx('bloop'); z.jiggle = 0.2;
+          texts.push({ x: it.x, y: my - 70 * S, t: 'bloop!', life: 0.9, col: '#cfe8ff', size: 44 });
+        } else { it.dead = true; catchItem(z, it); }
+      }
+    }
+    z.items = z.items.filter(it => !it.dead && it.y < H + it.r * 2 && it.y > -300 * S);
+  }
+  if (state === 'end' && Math.random() < 0.6) // golden confetti for the champion
+    particles.push({ x: rand(0, W), y: -10, vx: rand(-40, 40) * S, vy: rand(50, 150) * S, life: 3, max: 3,
+      col: ['#f7c843', '#fff1b0', '#8cf5a0', '#ffffff'][Math.floor(rand(0, 4))], r: rand(3, 7), g: 20 });
+  for (const p of particles) {
+    p.x += p.vx * dt; p.y += p.vy * dt; p.vy += (p.g ?? 500) * S * dt; p.life -= dt;
+    if (p.kind === 'smoke') { p.r += p.grow * dt; p.vx *= 0.97; }
+    if (p.kind === 'star') p.rot += dt * 5;
+  }
+  particles = particles.filter(p => p.life > 0);
+  if (particles.length > 500) particles.splice(0, particles.length - 500);
+  for (const t of texts) { t.y -= 80 * S * dt; t.life -= dt; }
+  texts = texts.filter(t => t.life > 0);
+}
+
+// ---------- draw ----------
+// The dungeon classroom is drawn once into its own picture (on resize), then copied every frame.
+let bg;
+const CANDLES = [[.05, .43], [.95, .43], [.07, .68], [.93, .68], [.3, .2], [.7, .2]];
+function makeBackground() {
+  bg = document.createElement('canvas'); bg.width = W; bg.height = H;
+  const g = bg.getContext('2d');
+  // stone wall: see-through, so the camera picture shows faintly
+  g.fillStyle = 'rgba(30,24,38,.62)'; g.fillRect(0, 0, W, H);
+  const bh = 58 * S, bw = 120 * S;
+  for (let row = 0, y = 0; y < H; row++, y += bh)
+    for (let x = row % 2 ? -bw / 2 : 0; x < W; x += bw) {
+      g.fillStyle = `rgba(${110 + Math.random() * 40},${100 + Math.random() * 30},${120 + Math.random() * 30},${rand(.06, .16)})`;
+      g.fillRect(x + 2, y + 2, bw - 4, bh - 4);
+      g.strokeStyle = 'rgba(0,0,0,.35)'; g.lineWidth = 3 * S; g.strokeRect(x + 2, y + 2, bw - 4, bh - 4);
+    }
+  // dark top and edges (vignette)
+  const v = g.createRadialGradient(W / 2, H * .55, H * .3, W / 2, H * .55, W * .7);
+  v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(5,2,10,.7)');
+  g.fillStyle = v; g.fillRect(0, 0, W, H);
+  // shelves with jars on both sides
+  const jarCols = ['#6cff7a', '#ff6cd8', '#4dd2ff', '#ffb84d', '#b06cff', '#ffe94d', '#ff5b5b'];
+  for (const [sx0, sx1] of [[0, .13], [.87, 1]])
+    for (const sy of [.45, .7]) {
+      const x0 = sx0 * W, x1 = sx1 * W, y = sy * H;
+      g.fillStyle = 'rgba(90,55,25,.9)'; g.fillRect(x0, y, x1 - x0, 12 * S);
+      g.fillStyle = 'rgba(50,30,12,.9)'; g.fillRect(x0, y + 12 * S, x1 - x0, 5 * S);
+      for (let x = x0 + 14 * S; x < x1 - 30 * S; x += rand(32, 44) * S) {
+        if (Math.abs(x - (sx0 ? .93 : .07) * W) < 20 * S && sy === .7) continue; // room for the candle
+        const jw = rand(20, 30) * S, jh = rand(30, 55) * S;
+        g.fillStyle = 'rgba(200,220,230,.25)'; g.fillRect(x, y - jh, jw, jh);
+        g.fillStyle = pick(jarCols); g.globalAlpha = .65; g.fillRect(x + 2, y - jh * .6, jw - 4, jh * .6 - 1); g.globalAlpha = 1;
+        g.fillStyle = '#8a5a2b'; g.fillRect(x + jw * .25, y - jh - 7 * S, jw * .5, 8 * S);
+      }
+    }
+  // stone floor
+  const f = g.createLinearGradient(0, H * .86, 0, H);
+  f.addColorStop(0, 'rgba(20,15,25,.5)'); f.addColorStop(1, 'rgba(10,8,14,.9)');
+  g.fillStyle = f; g.fillRect(0, H * .86, W, H * .14);
+}
+function drawCandles(t) {
+  for (const [fx, fy] of CANDLES) {
+    const x = fx * W, y = fy * H, fl = 1 + Math.sin(t * 13 + fx * 40) * .12 + Math.sin(t * 7 + fy * 30) * .08;
+    const glow = ctx.createRadialGradient(x, y - 30 * S, 2, x, y - 30 * S, 90 * S * fl);
+    glow.addColorStop(0, 'rgba(255,190,90,.35)'); glow.addColorStop(1, 'rgba(255,190,90,0)');
+    ctx.fillStyle = glow; ctx.fillRect(x - 100 * S, y - 130 * S, 200 * S, 200 * S);
+    ctx.fillStyle = '#efe4c8'; ctx.fillRect(x - 7 * S, y - 26 * S, 14 * S, 26 * S);
+    ctx.fillStyle = '#ffcf5a';
+    ctx.beginPath(); ctx.ellipse(x, y - 36 * S, 5 * S, 11 * S * fl, Math.sin(t * 5 + fx) * .15, 0, 7); ctx.fill();
+    ctx.fillStyle = '#fff6d8'; ctx.beginPath(); ctx.ellipse(x, y - 33 * S, 2.5 * S, 5 * S, 0, 0, 7); ctx.fill();
+  }
+}
+function starPath(R, r) {
+  ctx.beginPath();
+  for (let k = 0; k < 10; k++) { const a = k * Math.PI / 5 - Math.PI / 2, rr = k % 2 ? r : R; ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); }
+  ctx.closePath();
+}
+function sparkle(x, y, s, a) { // small 4-point twinkle
+  ctx.globalAlpha = a; ctx.fillStyle = '#fff8d0';
+  ctx.beginPath(); ctx.moveTo(x, y - s); ctx.lineTo(x + s * .25, y); ctx.lineTo(x, y + s); ctx.lineTo(x - s * .25, y); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(x - s, y); ctx.lineTo(x, y + s * .25); ctx.lineTo(x + s, y); ctx.lineTo(x, y - s * .25); ctx.closePath(); ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+function drawItem(it, t) {
+  const wob = it.bounced ? it.spin : Math.sin(t * 3 + it.ph) * 0.25;
+  const x = it.x + (it.bounced ? 0 : Math.sin(t * 2 + it.ph) * 7 * S), grow = Math.min(1, it.age * 4);
+  // soft magic halo
+  ctx.fillStyle = 'rgba(255,240,180,.16)'; ctx.beginPath(); ctx.arc(x, it.y, it.r * 1.15 * grow, 0, 7); ctx.fill();
+  ctx.save(); ctx.translate(x, it.y); ctx.rotate(wob);
+  drawEmoji(it.ing.e, 0, 0, it.r * 2.1 * grow);
+  ctx.restore();
+  const a = t * 2.2 + it.ph;
+  sparkle(x + Math.cos(a) * it.r * 1.1, it.y + Math.sin(a) * it.r * 1.1, 9 * S, .5 + .5 * Math.abs(Math.sin(t * 6 + it.ph)));
+}
+
+function drawCauldron(z, t) {
+  const w = potW(z), x = z.cx, my = mouthY(), bodyH = w * 1.15;
+  const j = z.jiggle > 0 ? Math.sin(z.jiggle * 60) * 4 * S : 0;
+  // fire
+  for (let k = -2; k <= 2; k++) {
+    const fh = (30 + 14 * Math.sin(t * 11 + k * 2)) * S, fx = x + k * w * .25;
+    ctx.fillStyle = k % 2 ? '#ff7a1a' : '#ffb21a';
+    ctx.beginPath(); ctx.moveTo(fx - 16 * S, H - 22 * S); ctx.quadraticCurveTo(fx, H - 22 * S - fh * 2, fx + 16 * S, H - 22 * S); ctx.fill();
+  }
+  ctx.fillStyle = '#4a2a14'; ctx.fillRect(x - w * .7, H - 26 * S, w * 1.4, 10 * S); // logs
+  ctx.save(); ctx.translate(j, 0);
+  // legs
+  ctx.fillStyle = '#1a1a1f';
+  for (const s of [-1, 1]) { ctx.beginPath(); ctx.moveTo(x + s * w * .45, my + bodyH * .8); ctx.lineTo(x + s * w * .62, my + bodyH * 1.0);
+    ctx.lineTo(x + s * w * .35, my + bodyH * .9); ctx.fill(); }
+  // body
+  const g = ctx.createRadialGradient(x - w * .35, my + bodyH * .3, w * .1, x, my + bodyH * .45, w * 1.2);
+  g.addColorStop(0, '#5a5a66'); g.addColorStop(.5, '#25252c'); g.addColorStop(1, '#09090c');
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.moveTo(x - w, my + 6 * S);
+  ctx.bezierCurveTo(x - w * 1.3, my + bodyH * .7, x - w * .6, my + bodyH, x, my + bodyH);
+  ctx.bezierCurveTo(x + w * .6, my + bodyH, x + w * 1.3, my + bodyH * .7, x + w, my + 6 * S); ctx.closePath(); ctx.fill();
+  // face badge on the front so each girl knows her cauldron
+  drawFace(z.face, x, my + bodyH * .5, w * .28, z.color);
+  // potion liquid + glow
+  const lc = rgb(z.liquid);
+  ctx.fillStyle = `rgba(${z.liquid[0] | 0},${z.liquid[1] | 0},${z.liquid[2] | 0},.22)`;
+  ctx.beginPath(); ctx.ellipse(x, my - 20 * S, w * 1.25, 70 * S, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = lc; ctx.beginPath(); ctx.ellipse(x, my, w * .95, 22 * S, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,.25)'; ctx.beginPath(); ctx.ellipse(x - w * .25, my - 5 * S, w * .35, 6 * S, 0, 0, 7); ctx.fill();
+  // bubbles
+  for (const b of z.bubs) {
+    ctx.globalAlpha = Math.min(1, b.life * 2);
+    ctx.fillStyle = lc; ctx.beginPath(); ctx.arc(x + b.x, my + b.y - 4 * S, b.r, 0, 7); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,.6)'; ctx.lineWidth = 2 * S; ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  // rim
+  ctx.strokeStyle = '#3b3b45'; ctx.lineWidth = 14 * S;
+  ctx.beginPath(); ctx.ellipse(x, my, w, 26 * S, 0, 0, 7); ctx.stroke();
+  ctx.strokeStyle = '#7a7a88'; ctx.lineWidth = 3 * S;
+  ctx.beginPath(); ctx.ellipse(x, my - 3 * S, w, 26 * S, 0, Math.PI * 1.05, Math.PI * 1.95); ctx.stroke();
+  ctx.restore();
+}
+
+function roundRect(x, y, w, h, r) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); }
+
+function drawHeader(z, t) {
+  const [x0, x1] = zoneX(z), mid = (x0 + x1) / 2;
+  // face + score
+  drawFace(z.face, mid - 60 * S, 46 * S, 34 * S, z.color);
+  ctx.fillStyle = z.color; ctx.font = `800 ${62 * S}px ${FONT}`; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillText(z.score, mid - 14 * S, 50 * S);
+  ctx.font = `600 ${20 * S}px ${FONT}`; ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
+  ctx.fillText(z.face.name + ' · ' + z.level.name, mid, 98 * S);
+  // recipe card (parchment)
+  const n = z.recipe.length, cw = Math.min((x1 - x0) * .72, (n * 88 + 60) * S), ch = 118 * S, cy = 114 * S;
+  const pop = 1 + z.cardPop * .25;
+  ctx.save(); ctx.translate(mid, cy + ch / 2); ctx.scale(pop, pop); ctx.translate(-mid, -(cy + ch / 2));
+  const pg = ctx.createLinearGradient(0, cy, 0, cy + ch);
+  pg.addColorStop(0, '#f6e7bf'); pg.addColorStop(1, '#dcc58f');
+  ctx.fillStyle = pg; roundRect(mid - cw / 2, cy, cw, ch, 10 * S); ctx.fill();
+  ctx.strokeStyle = '#8a5a2b'; ctx.lineWidth = 4 * S; ctx.stroke();
+  ctx.strokeStyle = 'rgba(138,90,43,.4)'; ctx.lineWidth = 1.5 * S; roundRect(mid - cw / 2 + 6 * S, cy + 6 * S, cw - 12 * S, ch - 12 * S, 6 * S); ctx.stroke();
+  ctx.fillStyle = '#5a2d0c'; ctx.font = `800 ${19 * S}px "Cinzel", Georgia, serif`;
+  ctx.fillText('📜 ' + z.potion, mid, cy + 22 * S);
+  const step = Math.min(88 * S, (cw - 30 * S) / n);
+  z.recipe.forEach((s, k) => {
+    const x = mid + (k - (n - 1) / 2) * step, y = cy + 72 * S;
+    const bounce = s.done ? 1 : 1 + Math.sin(t * 5 + k) * .06;
+    ctx.globalAlpha = s.done ? .45 : 1;
+    drawEmoji(s.ing.e, x, y, 58 * S * bounce);
+    ctx.globalAlpha = 1;
+    if (s.done) { // green tick
+      ctx.fillStyle = '#2e9e44'; ctx.beginPath(); ctx.arc(x + 18 * S, y + 14 * S, 16 * S, 0, 7); ctx.fill();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 5 * S; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(x + 10 * S, y + 14 * S); ctx.lineTo(x + 16 * S, y + 21 * S); ctx.lineTo(x + 27 * S, y + 7 * S); ctx.stroke();
+      ctx.lineCap = 'butt';
+    }
+  });
+  ctx.restore();
+}
+
+function draw() {
+  const t = performance.now() / 1000;
+  // camera picture, mirrored, faint behind the dungeon wall
+  ctx.fillStyle = '#140f1c'; ctx.fillRect(0, 0, W, H);
+  if (video.readyState >= 2) {
+    ctx.save(); ctx.globalAlpha = 0.5; ctx.translate(W, 0); ctx.scale(-1, 1);
+    ctx.drawImage(video, 0, 0, W, H); ctx.restore();
+  }
+  ctx.drawImage(bg, 0, 0, W, H);
+  drawCandles(t);
+
+  for (const z of zones) {
+    const [x0, x1] = zoneX(z);
+    ctx.save();
+    if (z.shake > 0) ctx.translate(Math.sin(z.shake * 80) * 12 * S, 0);
+    if (z.shake > 0) { ctx.fillStyle = `rgba(80,200,40,${z.shake * .4})`; ctx.fillRect(x0, 0, x1 - x0, H); }
+    if (z.flash > 0) { ctx.fillStyle = `rgba(255,240,200,${z.flash * .5})`; ctx.fillRect(x0, 0, x1 - x0, H); }
+    z.items.forEach(it => drawItem(it, t));
+    drawCauldron(z, t);
+    ctx.restore();
+    drawHeader(z, t);
+  }
+  if (zones.length === 2) {
+    ctx.strokeStyle = 'rgba(247,200,67,.45)'; ctx.lineWidth = 4; ctx.setLineDash([20, 16]);
+    ctx.beginPath(); ctx.moveTo(W / 2, 80 * S); ctx.lineTo(W / 2, H); ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  for (const p of particles) {
+    const a = Math.min(1, Math.max(0, p.life / Math.min(p.max || 0.6, 0.6)));
+    ctx.fillStyle = p.col;
+    if (p.kind === 'smoke') { ctx.globalAlpha = .45 * p.life / p.max; ctx.beginPath(); ctx.arc(p.x, p.y, p.r * S, 0, 7); ctx.fill(); }
+    else if (p.kind === 'star') {
+      ctx.globalAlpha = a; ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+      starPath(p.r * S, p.r * S * .45); ctx.fill(); ctx.restore();
+    } else { ctx.globalAlpha = a; ctx.beginPath(); ctx.arc(p.x, p.y, (p.r || 8) * S, 0, 7); ctx.fill(); }
+  }
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const t2 of texts) {
+    ctx.globalAlpha = Math.min(1, Math.max(0, t2.life / 0.6));
+    ctx.font = `900 ${t2.size * S}px ${FONT}`;
+    if (t2.rainbow) {
+      const g = ctx.createLinearGradient(t2.x - 250 * S, 0, t2.x + 250 * S, 0);
+      ['#ff5b5b', '#ffb84d', '#ffe94d', '#6cff7a', '#4dd2ff', '#b06cff'].forEach((c, k) => g.addColorStop(k / 5, c));
+      ctx.lineWidth = 8 * S; ctx.strokeStyle = '#2a1040'; ctx.strokeText(t2.t, t2.x, t2.y);
+      ctx.fillStyle = g;
+    } else { ctx.lineWidth = 5 * S; ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.strokeText(t2.t, t2.x, t2.y); ctx.fillStyle = t2.col; }
+    ctx.fillText(t2.t, t2.x, t2.y);
+  }
+  ctx.globalAlpha = 1;
+
+  if (state === 'play') { // timer: top middle (2 players) or top right (1 player)
+    const tx = zones.length === 2 ? W / 2 : W - 80 * S, ty = 40 * S;
+    ctx.fillStyle = 'rgba(20,12,30,.8)'; roundRect(tx - 62 * S, ty - 28 * S, 124 * S, 56 * S, 28 * S); ctx.fill();
+    ctx.strokeStyle = 'rgba(247,200,67,.7)'; ctx.lineWidth = 3 * S; ctx.stroke();
+    ctx.font = `800 ${34 * S}px ${FONT}`; ctx.fillStyle = timeLeft < 10 ? '#ff6b6b' : '#fff';
+    ctx.fillText('⌛' + Math.ceil(timeLeft), tx, ty + 2 * S);
+  }
+  if (state === 'count') {
+    const n = Math.ceil(countdown);
+    ctx.fillStyle = '#fff'; ctx.font = `900 ${260 * S}px ${FONT}`;
+    ctx.lineWidth = 10 * S; ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.strokeText(n > 0 ? n : 'GO!', W / 2, H / 2);
+    ctx.fillText(n > 0 ? n : 'GO!', W / 2, H / 2);
+    ctx.font = `600 ${36 * S}px ${FONT}`;
+    ctx.fillText('Catch what your recipe needs!', W / 2, H / 2 + 170 * S);
+  }
+}
+
+// ---------- main loop ----------
+addEventListener('resize', resize); resize();
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  track(now); update(dt); draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+setup();
+</script>
+</body>
+</html>

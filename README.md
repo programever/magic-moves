@@ -1,4 +1,4 @@
-# Motion Games
+# Magic Moves
 
 Motion games for kids. The MacBook camera watches their bodies; they play with their hands, shown on the TV.
 
@@ -7,17 +7,22 @@ Run: `python3 -m http.server 8765 --bind 127.0.0.1` in this folder, then open ht
 ```
 index.html           home page: pick a game
 games/<name>/        one folder per game (index.html + its own music/pictures)
-  snitch/            Catch the Snitch (Harry Potter). music/ = songs from Iker (not in git)
+  snitch/            Catch the Snitch: wand (right hand) catches flying Snitches, avoid Bludgers
+  broom/             Broom Race: move body left/right through rings, both hands up = boost
+  patronus/          Patronus vs Dementors: hold the wand on a Dementor to cast a Patronus
+  potion/            Potion Class: move body to catch recipe ingredients in a cauldron
+  feather/           Wingardium Leviosa: keep falling feathers up with the wand
 shared/              used by every game
   tracking.js        camera + body tracking (MediaPipe pose, 2 players)
   kids.js            players: names + faces, drawKidFace(), kidImg()
   kids.example.js    example for shared/private/kids.js
   lib/               MediaPipe library + model, downloaded so it works offline
+  music/             NOT in git: game.mp3 (during play), winner.mp3 (trophy screen)
   private/           NOT in git: kids.js (real names) + photos/ (face photos)
 .venv/               Python + Playwright, only for testing
 ```
 
 New game: copy `games/snitch/` to `games/<name>/`, change it, add a card in `index.html`.
 Test a short round: add `?t=10` to the game address (10 second round).
-Not in git (see .gitignore): shared/private/ (kids' names + photos), games/*/music/ (songs we do not own),
+Not in git (see .gitignore): shared/private/ (kids' names + photos), shared/music/ (songs we do not own),
 .venv/. Without them the games still run: default player names, and music made by code.
