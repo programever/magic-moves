@@ -160,7 +160,7 @@ function playStep(i, t) {
 }
 // Real music files from Iker (shared/music/, not in git). If a file can't play, the code waltz plays instead.
 const gameSong = new Audio('../../shared/music/game.mp3'), winnerSong = new Audio('../../shared/music/winner.mp3');
-gameSong.loop = true; gameSong.volume = 0.5; winnerSong.volume = 0.7;
+gameSong.loop = true; gameSong.volume = 0.4; winnerSong.volume = 0.7;
 let winnerTimer = null;
 function startMusic() {
   if (!musicOn) return;
@@ -176,7 +176,7 @@ function playWinnerSong() {
 function stopWinnerSong() { clearTimeout(winnerTimer); winnerSong.pause(); }
 function startSynth() {
   if (!ac || !musicOn || musicTimer) return;
-  musicGain = ac.createGain(); musicGain.gain.value = 0.12; musicGain.connect(ac.destination);
+  musicGain = ac.createGain(); musicGain.gain.value = 0.096; musicGain.connect(ac.destination);
   musicStep = 0; nextNote = ac.currentTime + 0.05;
   musicTimer = setInterval(() => {
     while (nextNote < ac.currentTime + 0.12) { playStep(musicStep++, nextNote); nextNote += STEP; }
