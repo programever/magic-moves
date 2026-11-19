@@ -17,7 +17,7 @@ games/<name>/        one folder per game (index.html + its own music/pictures)
   spells/            Spell Class: trace a spell shape in the air with the wand
   owls/              Hedwig Post: take letters from owls, put them in the box with the same color
   duel/              Wizard Duel: sisters duel; right hand flicks spells, left hand up = shield
-  dino/              Dino Run: jump over rocks, duck under pterodactyls (2 players = top/bottom lanes)
+  dino/              Forbidden Forest Run: jump over roots, duck under bats (2 players = top/bottom lanes)
 shared/              used by every game
   recorder.js        records the camera + microphone each round; end screen: Replay / Save video (else deleted)
   tracking.js        camera + body tracking (MediaPipe pose, 2 players)
