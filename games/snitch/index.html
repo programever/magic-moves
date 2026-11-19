@@ -1,0 +1,491 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Catch the Snitch</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Cinzel:wght@600;800&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; height: 100%; background: #120a24; overflow: hidden;
+    font-family: "Cinzel", Georgia, serif; color: #fff; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; }
+  video { display: none; }
+  .overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 22px; background: rgba(18, 10, 36, .86); text-align: center; }
+  .hidden { display: none !important; }
+  h1 { font-family: "Cinzel Decorative", Georgia, serif; font-size: 72px; margin: 0; color: #f7c843;
+    text-shadow: 0 0 25px #ffb30088; }
+  #end { background: rgba(18, 10, 36, .55); gap: 10px; }
+  #end h1 { font-size: 44px; }
+  #trophy { display: flex; gap: 60px; }
+  .cup { position: relative; width: 170px; filter: drop-shadow(0 0 25px #ffd700);
+    animation: shine 1.2s ease-in-out infinite alternate; }
+  .cup svg { width: 170px; display: block; }
+  .cupface { position: absolute; left: 50%; top: 65px; transform: translate(-50%, -50%); }
+  .cupface img { width: 72px !important; height: 72px !important; }
+  @keyframes shine { from { transform: rotate(-4deg) scale(1); } to { transform: rotate(4deg) scale(1.07); } }
+  .row { display: flex; gap: 14px; align-items: center; font-size: 28px; }
+  .row span { width: 220px; text-align: right; }
+  button { font: inherit; font-size: 28px; padding: 12px 28px; border-radius: 40px; border: 3px solid #fff3;
+    background: #ffffff14; color: #fff; cursor: pointer; }
+  button.on { background: #f7c843; border-color: #f7c843; color: #2a1600; font-weight: 800; }
+  #start, .again { font-size: 40px; padding: 18px 60px; background: #7f0909; border-color: #f7c843;
+    color: #f7e7b0; font-weight: 800; }
+  .help { font-size: 22px; opacity: .8; max-width: 900px; line-height: 1.5; }
+  #status { position: fixed; bottom: 20px; left: 0; right: 0; text-align: center; font-size: 26px; }
+  #result { font-size: 28px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="menu" class="overlay">
+  <h1>⚡ Catch the Snitch ⚡</h1>
+  <div class="row"><span>Players</span>
+    <button data-players="1">1 player</button><button data-players="2">2 players</button></div>
+  <div class="row" id="lvl0"><span id="lvl0name">Left player</span>
+    <button data-side="0" data-level="easy">Easy</button><button data-side="0" data-level="hard">Hard</button></div>
+  <div class="row" id="lvl1"><span>Right player</span>
+    <button data-side="1" data-level="easy">Easy</button><button data-side="1" data-level="hard">Hard</button></div>
+  <button id="home" onclick="location.href='../../'">🏠 All games</button>
+  <button id="start">Start ▶</button>
+  <div class="help">Your right hand is your magic wand ✨ Catch the Golden Snitch!<br>
+    Snitch = 1 point. &nbsp; Snitch with your face = 5 points.<br>
+    Black Bludger ball (Hard only) = minus 3. Don't touch it!<br>
+    Keys: Space = start, Esc = back to menu, F = full screen, M = music on/off</div>
+</div>
+
+<div id="end" class="overlay hidden">
+  <h1 id="endTitle"></h1>
+  <div id="trophy"></div>
+  <div id="result"></div>
+  <button class="again">Play again ▶</button>
+  <button id="toMenu">Menu</button>
+</div>
+
+<div id="status"></div>
+
+<script type="module">
+import { video, startTracking, track as trackPoses } from '../../shared/tracking.js';
+import { KIDS, drawKidFace, kidImg } from '../../shared/kids.js';
+
+const $ = s => document.querySelector(s);
+const canvas = $('#c'), ctx = canvas.getContext('2d');
+const rand = (a, b) => a + Math.random() * (b - a);
+
+let W, H, S;
+function resize() {
+  const d = devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight; S = H / 900;
+  canvas.width = W * d; canvas.height = H * d; ctx.setTransform(d, 0, 0, d, 0, 0);
+}
+addEventListener('resize', resize); resize();
+
+// ---------- settings ----------
+const LEVELS = {
+  easy: { name: 'Easy', every: 1.3, rMin: 46, rMax: 56, vMin: 90, vMax: 150, life: 6, bad: 0, gold: 0.1 },
+  hard: { name: 'Hard', every: 0.6, rMin: 32, rMax: 40, vMin: 220, vMax: 340, life: 4, bad: 0.18, gold: 0.07 },
+};
+const ROUND = +new URLSearchParams(location.search).get('t') || 60, HAND_R = 34; // ?t=10 = 10 second round
+const FACES = { easy: KIDS.player1, hard: KIDS.player2 }; // Easy = player 1, Hard = player 2
+const drawFace = (f, x, y, r, ring) => drawKidFace(ctx, f, x, y, r, ring);
+const COLORS = ['#ff6b5b', '#6fb4ff'];
+const settings = { players: 2, levels: ['easy', 'hard'] };
+
+function refreshMenu() {
+  document.querySelectorAll('[data-players]').forEach(b => b.classList.toggle('on', +b.dataset.players === settings.players));
+  document.querySelectorAll('[data-level]').forEach(b => b.classList.toggle('on', settings.levels[b.dataset.side] === b.dataset.level));
+  $('#lvl1').classList.toggle('hidden', settings.players === 1);
+  $('#lvl0name').textContent = settings.players === 1 ? 'Level' : 'Left player';
+}
+document.querySelectorAll('[data-players]').forEach(b => b.onclick = () => { settings.players = +b.dataset.players; refreshMenu(); });
+document.querySelectorAll('[data-level]').forEach(b => b.onclick = () => { settings.levels[b.dataset.side] = b.dataset.level; refreshMenu(); });
+refreshMenu();
+
+// ---------- sound ----------
+let ac;
+function tone(type, f1, f2, dur, vol, delay = 0) {
+  const t = ac.currentTime + delay, o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.connect(g); g.connect(ac.destination);
+  o.frequency.setValueAtTime(f1, t); o.frequency.exponentialRampToValueAtTime(f2, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function sfx(kind) {
+  if (!ac) return;
+  if (kind === 'pop') [1319, 1760, 2093].forEach((f, i) => tone('sine', f, f, 0.18, 0.22, i * 0.05));
+  if (kind === 'gold') [988, 1319, 1568, 1976, 2637].forEach((f, i) => tone('sine', f, f, 0.25, 0.25, i * 0.06));
+  if (kind === 'bad') { tone('sine', 140, 40, 0.4, 0.5); tone('sawtooth', 90, 50, 0.3, 0.15); }
+  if (kind === 'beep') tone('square', 600, 600, 0.12, 0.15);
+  if (kind === 'go') tone('square', 900, 900, 0.3, 0.15);
+  if (kind === 'end') // trumpet fanfare
+    [[523, 0, .15], [523, .18, .15], [523, .36, .15], [698, .54, .35], [880, .92, .2], [784, 1.12, .2], [1047, 1.32, .9]]
+      .forEach(([f, d, len]) => { tone('sawtooth', f, f, len, 0.12, d); tone('triangle', f, f, len, 0.25, d); });
+}
+
+// ---------- background music (made by code: a magic waltz in E minor, 3 beats per bar) ----------
+const MELODY = [76, 79, 83,  84, 83, 79,  81, 76, 72,  75, 78, 71,
+                83, 79, 76,  79, 84, 88,  84, 81, 76,  78, 75, 71];
+const ROOTS = [40, 36, 45, 47], STEP = 60 / 150;
+let musicOn = true, musicTimer = null, musicStep = 0, nextNote = 0, musicGain = null;
+const midi = m => 440 * 2 ** ((m - 69) / 12);
+function note(freq, t, dur, type, vol) {
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.frequency.value = freq; o.connect(g); g.connect(musicGain);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function playStep(i, t) {
+  const m = MELODY[i % 24], beat = i % 3, root = ROOTS[Math.floor(i / 3) % 4];
+  note(midi(m), t, 1.0, 'sine', 0.45); note(midi(m + 12), t, 0.35, 'sine', 0.15); // bell sound
+  if (beat === 0) note(midi(root), t, STEP * 2.5, 'triangle', 0.6);
+  else note(midi(root + 12 + (beat === 1 ? 7 : 12)), t, STEP * 0.8, 'triangle', 0.25);
+}
+// Real music files from Iker (music/). If a file can't play, the code waltz plays instead.
+const gameSong = new Audio('music/game.mp3'), winnerSong = new Audio('music/winner.mp3');
+gameSong.loop = true; gameSong.volume = 0.5; winnerSong.volume = 0.7;
+let winnerTimer = null;
+function startMusic() {
+  if (!musicOn) return;
+  stopWinnerSong();
+  gameSong.currentTime = 0;
+  gameSong.play().catch(startSynth);
+}
+function stopMusic() { gameSong.pause(); stopSynth(); }
+function playWinnerSong() {
+  if (!musicOn) return;
+  winnerTimer = setTimeout(() => { winnerSong.currentTime = 0; winnerSong.play().catch(() => {}); }, 2200); // after the trumpet
+}
+function stopWinnerSong() { clearTimeout(winnerTimer); winnerSong.pause(); }
+function startSynth() {
+  if (!ac || !musicOn || musicTimer) return;
+  musicGain = ac.createGain(); musicGain.gain.value = 0.12; musicGain.connect(ac.destination);
+  musicStep = 0; nextNote = ac.currentTime + 0.05;
+  musicTimer = setInterval(() => {
+    while (nextNote < ac.currentTime + 0.12) { playStep(musicStep++, nextNote); nextNote += STEP; }
+  }, 25);
+}
+function stopSynth() {
+  if (!musicTimer) return;
+  clearInterval(musicTimer); musicTimer = null;
+  musicGain.gain.setTargetAtTime(0, ac.currentTime, 0.1);
+}
+
+// ---------- camera + body tracking ----------
+let poses = [];
+const status = t => $('#status').textContent = t;
+const setup = () => startTracking(status);
+const track = now => { poses = trackPoses(now); };
+
+// Camera is mirrored, so x is flipped. Video is stretched to fill the screen.
+const sx = lm => (1 - lm.x) * W, sy = lm => lm.y * H;
+
+// ---------- game state ----------
+let state = 'menu', timeLeft = 0, countdown = 0, zones = [], particles = [], texts = [], mouse = null;
+
+function makeZones() {
+  zones = [];
+  for (let i = 0; i < settings.players; i++)
+    zones.push({ i, level: LEVELS[settings.levels[i]], face: FACES[settings.levels[i]], score: 0, bubbles: [], spawnT: 0, color: COLORS[i], hands: [], shake: 0 });
+}
+const zoneX = z => { const w = W / zones.length; return [z.i * w, (z.i + 1) * w]; };
+
+function assignHands() {
+  zones.forEach(z => z.hands = []);
+  for (const p of poses) {
+    const z = zones.length === 1 ? zones[0] : zones[sx(p[0]) < W / 2 ? 0 : 1];
+    for (const [wrist, finger] of [[16, 20]]) { // right hand only (16 = right wrist, 20 = right finger)
+      if ((p[wrist].visibility ?? 1) < 0.3) continue;
+      const f = (p[finger].visibility ?? 1) > 0.3 ? p[finger] : p[wrist];
+      z.hands.push({ x: sx(f), y: sy(f) });
+    }
+  }
+  if (mouse) {
+    const z = zones.length === 1 ? zones[0] : zones[mouse.x < W / 2 ? 0 : 1];
+    z.hands.push(mouse);
+  }
+}
+
+function spawn(z) {
+  const L = z.level, [x0, x1] = zoneX(z), roll = Math.random();
+  const type = roll < L.bad ? 'bad' : roll < L.bad + L.gold ? 'gold' : 'normal';
+  const r = rand(L.rMin, L.rMax) * S * (type === 'gold' ? 1.4 : type === 'bad' ? 1.2 : 1);
+  const sp = rand(L.vMin, L.vMax) * S * (type === 'bad' ? 0.6 : 1);
+  z.bubbles.push({ x: rand(x0 + r * 2.5, x1 - r * 2.5), y: H + r, r, vx: rand(-0.5, 0.5) * sp, vy: -sp,
+    wob: rand(0, 6.28), dart: rand(0.5, 1.2), age: 0, type });
+}
+
+function pop(z, b) {
+  const pts = b.type === 'gold' ? 5 : b.type === 'bad' ? -3 : 1;
+  z.score = Math.max(0, z.score + pts);
+  sfx(b.type === 'gold' ? 'gold' : b.type === 'bad' ? 'bad' : 'pop');
+  if (b.type === 'bad') z.shake = 0.4;
+  const col = b.type === 'bad' ? '#ff4d4d' : '#ffd84a';
+  for (let k = 0; k < 14; k++) {
+    const a = rand(0, 6.28), v = rand(150, 400) * S;
+    particles.push({ x: b.x, y: b.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0.6, col });
+  }
+  texts.push({ x: b.x, y: b.y, t: (pts > 0 ? '+' : '') + pts, life: 0.8, col });
+}
+
+function startGame() {
+  if (!ac) ac = new AudioContext();
+  ac.resume();
+  stopMusic(); startMusic();
+  makeZones(); particles = []; texts = [];
+  $('#menu').classList.add('hidden'); $('#end').classList.add('hidden');
+  state = 'count'; countdown = 3.99; lastBeep = 4;
+}
+let lastBeep = 4;
+
+function endGame() {
+  state = 'end'; stopMusic(); sfx('end'); playWinnerSong();
+  const best = Math.max(...zones.map(z => z.score)), winners = zones.filter(z => z.score === best);
+  $('#endTitle').textContent = zones.length === 1 ? `${zones[0].face.name}, Champion Seeker!`
+    : winners.length === 2 ? 'A tie! Two champions!' : `${winners[0].face.name} wins the Quidditch Cup!`;
+  $('#trophy').innerHTML = winners.map(z => `<div class="cup">${CUP}<div class="cupface">${faceImg(z.face, '#fff6c8')}</div></div>`).join('');
+  const lines = zones.map((z, i) => {
+    const who = z.face.name;
+    return `<span style="color:${z.color}">${faceImg(z.face, z.color)} ${who} (${z.level.name}): <b>${z.score}</b> points</span>`;
+  });
+  $('#result').innerHTML = lines.join('<br>');
+  $('#end').classList.remove('hidden');
+}
+const CUP = `<svg viewBox="0 0 200 240"><defs><linearGradient id="gold" x1="0" x2="1">
+  <stop offset="0" stop-color="#8a5a00"/><stop offset=".35" stop-color="#fff1b0"/><stop offset=".6" stop-color="#f5c542"/>
+  <stop offset="1" stop-color="#8a5a00"/></linearGradient></defs>
+  <path d="M48 35 C5 35 5 105 62 112" fill="none" stroke="url(#gold)" stroke-width="12"/>
+  <path d="M152 35 C195 35 195 105 138 112" fill="none" stroke="url(#gold)" stroke-width="12"/>
+  <path d="M38 20 H162 C162 105 132 135 100 140 C68 135 38 105 38 20Z" fill="url(#gold)"/>
+  <rect x="90" y="138" width="20" height="38" fill="url(#gold)"/>
+  <path d="M62 176 H138 L150 202 H50Z" fill="url(#gold)"/>
+  <rect x="36" y="202" width="128" height="30" rx="5" fill="#7f0909" stroke="#f5c542" stroke-width="3"/>
+  <text x="100" y="223" text-anchor="middle" font-family="Cinzel, Georgia, serif" font-weight="800" font-size="17"
+    fill="#f7e7b0">⚡ CHAMPION ⚡</text></svg>`;
+const faceImg = kidImg;
+function toMenu() {
+  state = 'menu'; zones = []; stopMusic(); stopWinnerSong();
+  $('#end').classList.add('hidden'); $('#menu').classList.remove('hidden');
+}
+
+$('#start').onclick = startGame;
+document.querySelector('.again').onclick = startGame;
+$('#toMenu').onclick = toMenu;
+addEventListener('keydown', e => {
+  if (e.code === 'Space' && state !== 'play' && state !== 'count') startGame();
+  if (e.code === 'Escape') toMenu();
+  if (e.code === 'KeyH') location.href = '../../';
+  if (e.code === 'KeyM') { musicOn = !musicOn; if (musicOn && (state === 'play' || state === 'count')) startMusic(); else { stopMusic(); stopWinnerSong(); } }
+  if (e.code === 'KeyF') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+});
+addEventListener('mousemove', e => mouse = { x: e.clientX, y: e.clientY });
+document.addEventListener('mouseleave', () => mouse = null);
+
+// ---------- update ----------
+function update(dt) {
+  if (state === 'count') {
+    countdown -= dt;
+    const n = Math.ceil(countdown);
+    if (n < lastBeep) { lastBeep = n; sfx(n > 0 ? 'beep' : 'go'); }
+    if (countdown <= 0) { state = 'play'; timeLeft = ROUND; }
+  } else if (state === 'play') {
+    timeLeft -= dt;
+    if (timeLeft <= 0) { timeLeft = 0; endGame(); }
+  }
+  if (zones.length) assignHands();
+
+  for (const z of zones) {
+    z.shake = Math.max(0, z.shake - dt);
+    if (state === 'play') {
+      z.spawnT -= dt;
+      if (z.spawnT <= 0) { spawn(z); z.spawnT = z.level.every * rand(0.7, 1.3); }
+    }
+    for (const b of z.bubbles) {
+      const L = z.level; b.age += dt; b.wob += dt * 28;
+      if (b.age > L.life || state !== 'play') b.vy -= 900 * S * dt; // fly away up
+      else {
+        if (b.y < H - b.r) b.inside = true;
+        if (b.inside) { // dart around inside its half of the screen
+          b.dart -= dt;
+          if (b.dart <= 0) {
+            const a = rand(0, Math.PI * 2), sp = rand(L.vMin, L.vMax) * S * (b.type === 'bad' ? 0.6 : 1);
+            b.vx = Math.cos(a) * sp; b.vy = Math.sin(a) * sp; b.dart = rand(0.5, 1.3);
+          }
+          if (b.type === 'bad') for (const h of z.hands) { // Bludgers fly AWAY from the wand, never toward it
+            const dx = b.x - h.x, dy = b.y - h.y, d = Math.hypot(dx, dy) || 1;
+            if (d < 250 * S) { const sp = Math.hypot(b.vx, b.vy); b.vx = dx / d * sp; b.vy = dy / d * sp; b.dart = 0.6; }
+          }
+          const [x0, x1] = zoneX(z), m = b.r * 2.5;
+          if (b.x < x0 + m) b.vx = Math.abs(b.vx);
+          if (b.x > x1 - m) b.vx = -Math.abs(b.vx);
+          if (b.y < 150 * S) b.vy = Math.abs(b.vy);
+          if (b.y > H - b.r) b.vy = -Math.abs(b.vy);
+        }
+      }
+      b.x += b.vx * dt; b.y += b.vy * dt;
+      if (state !== 'play') continue;
+      if (z.hands.some(h => Math.hypot(h.x - b.x, h.y - b.y) < b.r * 1.3 + HAND_R * S)) { b.dead = true; pop(z, b); }
+    }
+    z.bubbles = z.bubbles.filter(b => !b.dead && b.y > -b.r * 3);
+    for (const h of z.hands) // magic sparkles from the wand
+      particles.push({ x: h.x + rand(-10, 10) * S, y: h.y + rand(-10, 10) * S, vx: rand(-60, 60) * S, vy: rand(-60, 20) * S,
+        life: 0.5, col: Math.random() < 0.5 ? '#fff1b0' : z.color, r: rand(2, 5) });
+  }
+  if (state === 'end' && Math.random() < 0.6) // golden confetti for the champion
+    particles.push({ x: rand(0, W), y: -10, vx: rand(-40, 40) * S, vy: rand(50, 150) * S, life: 3,
+      col: ['#f7c843', '#fff1b0', '#ff6b5b', '#ffffff'][Math.floor(rand(0, 4))], r: rand(3, 7), g: 20 });
+  for (const p of particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += (p.g ?? 500) * S * dt; p.life -= dt; }
+  particles = particles.filter(p => p.life > 0);
+  for (const t of texts) { t.y -= 80 * S * dt; t.life -= dt; }
+  texts = texts.filter(t => t.life > 0);
+}
+
+// ---------- draw ----------
+function drawSnitch(b) {
+  const r = b.r;
+  ctx.save(); ctx.translate(b.x, b.y);
+  if (b.type === 'bad') { // Bludger: heavy black iron ball with angry red eyes
+    const g = ctx.createRadialGradient(-r * .35, -r * .35, r * .1, 0, 0, r);
+    g.addColorStop(0, '#8a8a8a'); g.addColorStop(.5, '#3a3a3a'); g.addColorStop(1, '#111');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, r, 0, 7); ctx.fill();
+    ctx.strokeStyle = '#000a'; ctx.lineWidth = 3 * S;
+    ctx.beginPath(); ctx.ellipse(0, 0, r, r * .35, 0, 0, 7); ctx.stroke();
+    ctx.fillStyle = '#ff3b3b'; ctx.shadowColor = '#f00'; ctx.shadowBlur = 15 * S;
+    for (const ex of [-.3, .3]) { ctx.beginPath(); ctx.arc(ex * r, -r * .15, r * .1, 0, 7); ctx.fill(); }
+    ctx.restore(); return;
+  }
+  // wings
+  const flap = 0.3 + 0.7 * Math.abs(Math.sin(b.wob));
+  for (const side of [-1, 1]) {
+    ctx.save(); ctx.scale(side, 1);
+    ctx.beginPath(); ctx.moveTo(r * .7, -r * .1);
+    ctx.quadraticCurveTo(r * 1.4, -r * 1.5 * flap, r * 2.4, -r * 1.0 * flap);
+    ctx.quadraticCurveTo(r * 1.7, -r * .1, r * .7, r * .25); ctx.closePath();
+    ctx.fillStyle = 'rgba(248,244,230,.93)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(170,150,100,.9)'; ctx.lineWidth = 1.5 * S; ctx.stroke();
+    ctx.beginPath();
+    for (let k = 1; k <= 3; k++) { ctx.moveTo(r * .8, 0); ctx.lineTo(r * (1.1 + k * .4), -r * (.3 + k * .22) * flap); }
+    ctx.stroke(); ctx.restore();
+  }
+  // golden ball
+  ctx.shadowColor = '#ffd700'; ctx.shadowBlur = 25 * S;
+  const g = ctx.createRadialGradient(-r * .35, -r * .35, r * .1, 0, 0, r);
+  g.addColorStop(0, '#fff6c8'); g.addColorStop(.45, '#f7c843'); g.addColorStop(1, '#a86f00');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, r, 0, 7); ctx.fill();
+  ctx.shadowBlur = 0;
+  if (b.type === 'gold') drawFace(b.face, 0, 0, r * .8, '#fff6c8');
+  else {
+    ctx.strokeStyle = 'rgba(130,85,0,.7)'; ctx.lineWidth = 2 * S;
+    ctx.beginPath(); ctx.moveTo(0, -r); ctx.bezierCurveTo(r * .45, -r * .3, -r * .45, r * .3, 0, r); ctx.stroke();
+    ctx.beginPath(); ctx.arc(0, 0, r * .62, -2.5, -.65); ctx.stroke();
+    ctx.beginPath(); ctx.arc(0, 0, r * .62, .65, 2.5); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+const stars = Array.from({ length: 140 }, () => ({ x: Math.random(), y: Math.random() * 0.75, r: rand(0.6, 2.2), p: rand(0, 6.28) }));
+// castle towers: x, height, width (parts of the screen); the middle stays open so kids can see themselves
+const TOWERS = [[.04, .2, .05], [.11, .3, .04], [.19, .16, .06], [.28, .24, .035], [.68, .22, .04], [.76, .33, .05], [.85, .17, .06], [.94, .26, .04]];
+function drawSky() {
+  const t = performance.now() / 1000;
+  const sky = ctx.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, 'rgba(8,5,35,.88)'); sky.addColorStop(.6, 'rgba(35,15,70,.5)'); sky.addColorStop(1, 'rgba(20,10,30,.35)');
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#fff';
+  for (const st of stars) {
+    ctx.globalAlpha = 0.35 + 0.65 * Math.abs(Math.sin(t * 1.3 + st.p));
+    ctx.beginPath(); ctx.arc(st.x * W, st.y * H, st.r * S, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  ctx.save(); ctx.shadowColor = '#fff8dc'; ctx.shadowBlur = 50 * S; ctx.fillStyle = '#fff8dc';
+  ctx.beginPath(); ctx.arc(W * .5, 90 * S, 40 * S, 0, 7); ctx.fill(); ctx.restore();
+  ctx.fillStyle = 'rgba(8,4,20,.65)';
+  ctx.fillRect(0, H * .93, W, H * .07);
+  for (const [fx, fh, fw] of TOWERS) {
+    const x = fx * W, w = fw * W, h = fh * H;
+    ctx.fillRect(x - w / 2, H - h, w, h);
+    ctx.beginPath(); ctx.moveTo(x - w * .65, H - h); ctx.lineTo(x, H - h - w * 1.6); ctx.lineTo(x + w * .65, H - h); ctx.fill();
+  }
+  ctx.fillStyle = 'rgba(255,200,90,.7)';
+  for (const [fx, fh] of TOWERS) ctx.fillRect(fx * W - 4 * S, H - fh * H * .7, 8 * S, 14 * S);
+}
+function starPath(R, r) {
+  ctx.beginPath();
+  for (let k = 0; k < 10; k++) { const a = k * Math.PI / 5 - Math.PI / 2, rr = k % 2 ? r : R; ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); }
+  ctx.closePath();
+}
+
+function draw() {
+  // camera picture, mirrored, under a night sky
+  ctx.fillStyle = '#120a24'; ctx.fillRect(0, 0, W, H);
+  if (video.readyState >= 2) {
+    ctx.save(); ctx.globalAlpha = 0.5; ctx.translate(W, 0); ctx.scale(-1, 1);
+    ctx.drawImage(video, 0, 0, W, H); ctx.restore();
+  }
+  drawSky();
+
+  for (const z of zones) {
+    const [x0, x1] = zoneX(z);
+    ctx.save();
+    if (z.shake > 0) ctx.translate(Math.sin(z.shake * 80) * 12 * S, 0);
+    if (z.shake > 0) { ctx.fillStyle = `rgba(255,0,0,${z.shake * .5})`; ctx.fillRect(x0, 0, x1 - x0, H); }
+    z.bubbles.forEach(b => { b.face = z.face; drawSnitch(b); });
+    // right hand = a glowing star at the wand tip
+    for (const h of z.hands) {
+      ctx.save(); ctx.translate(h.x, h.y); ctx.rotate(performance.now() / 400);
+      ctx.shadowColor = z.color; ctx.shadowBlur = 30 * S; ctx.fillStyle = '#fff6c8';
+      starPath(HAND_R * S, HAND_R * S * .45); ctx.fill();
+      ctx.lineWidth = 3 * S; ctx.strokeStyle = z.color; ctx.stroke(); ctx.restore();
+    }
+    ctx.restore();
+    // score
+    ctx.fillStyle = z.color; ctx.font = `800 ${70 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.fillText(z.score, (x0 + x1) / 2 + 40 * S, 18 * S);
+    drawFace(z.face, (x0 + x1) / 2 - 50 * S, 55 * S, 42 * S, z.color);
+    ctx.font = `600 ${24 * S}px "Cinzel Decorative", Georgia, serif`; ctx.fillStyle = '#fff';
+    ctx.fillText(z.face.name + ' · ' + z.level.name, (x0 + x1) / 2, 100 * S);
+  }
+  if (zones.length === 2) {
+    ctx.strokeStyle = 'rgba(247,200,67,.45)'; ctx.lineWidth = 4; ctx.setLineDash([20, 16]);
+    ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  for (const p of particles) {
+    ctx.globalAlpha = Math.min(1, Math.max(0, p.life / 0.6)); ctx.fillStyle = p.col;
+    ctx.beginPath(); ctx.arc(p.x, p.y, (p.r || 8) * S, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  for (const t of texts) {
+    ctx.globalAlpha = Math.max(0, t.life / 0.8); ctx.fillStyle = t.col;
+    ctx.font = `800 ${50 * S}px "Cinzel Decorative", Georgia, serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(t.t, t.x, t.y);
+  }
+  ctx.globalAlpha = 1;
+
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#fff';
+  if (state === 'play') {
+    ctx.font = `800 ${44 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillStyle = timeLeft < 10 ? '#ff6b6b' : '#fff';
+    ctx.fillText('⌛ ' + Math.ceil(timeLeft), W / 2, H - 40 * S);
+  }
+  if (state === 'count') {
+    const n = Math.ceil(countdown);
+    ctx.font = `900 ${260 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillText(n > 0 ? n : 'GO!', W / 2, H / 2);
+    ctx.font = `600 ${36 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillText(zones.length === 2 ? 'Catch the Golden Snitch!' : 'Get ready, Seeker!', W / 2, H / 2 + 170 * S);
+  }
+}
+
+// ---------- main loop ----------
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  track(now); update(dt); draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+setup();
+</script>
+</body>
+</html>

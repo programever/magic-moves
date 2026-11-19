@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Motion Games</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700&family=Cinzel:wght@700&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; min-height: 100%; background: radial-gradient(circle at 50% 0, #2c1a5a, #0d0820 70%);
+    color: #fff; font-family: "Cinzel", Georgia, serif; }
+  h1 { font-family: "Cinzel Decorative", Georgia, serif; text-align: center; font-size: 64px; margin: 50px 0 10px;
+    color: #f7c843; text-shadow: 0 0 25px #ffb30088; }
+  p { text-align: center; font-size: 22px; opacity: .8; margin: 0 0 40px; }
+  .games { display: flex; flex-wrap: wrap; gap: 36px; justify-content: center; padding: 0 30px 40px; }
+  a.game { width: 320px; padding: 34px 20px; border-radius: 28px; text-decoration: none; color: #fff; text-align: center;
+    background: #ffffff10; border: 3px solid #ffffff30; transition: transform .15s, border-color .15s; }
+  a.game:hover, a.game:focus { transform: scale(1.06); border-color: #f7c843; outline: none; }
+  .icon { font-size: 110px; line-height: 1.2; }
+  .name { font-size: 32px; margin-top: 10px; }
+  .key { font-size: 18px; opacity: .6; margin-top: 8px; }
+  .soon { opacity: .4; pointer-events: none; }
+</style>
+</head>
+<body>
+<h1>✨ Motion Games ✨</h1>
+<p>Pick a game. Move your body to play!</p>
+<div class="games">
+  <!-- To add a game: make games/<name>/index.html, then add a card here. -->
+  <a class="game" href="games/snitch/"><div class="icon">⚡</div><div class="name">Catch the Snitch</div><div class="key">press 1</div></a>
+  <a class="game soon"><div class="icon">🎁</div><div class="name">More coming…</div></a>
+</div>
+<script>
+  const games = [...document.querySelectorAll('a.game[href]')];
+  addEventListener('keydown', e => { const g = games[+e.key - 1]; if (g) location.href = g.href; });
+</script>
+</body>
+</html>
