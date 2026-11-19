@@ -19,8 +19,9 @@ games/<name>/        one folder per game (index.html + its own music/pictures)
   duel/              Wizard Duel: sisters duel; right hand flicks spells, left hand up = shield
   dance/             Dance Party: touch the beat stars on the beat (music made by code)
   fishing/           Ocean Fishing: catch fish with a net in the right hand, avoid jellyfish
+  dino/              Dino Run: jump over rocks, duck under pterodactyls (2 players = top/bottom lanes)
 shared/              used by every game
-  recorder.js        records each round; end screen: Replay / Save video (else deleted)
+  recorder.js        records the camera + microphone each round; end screen: Replay / Save video (else deleted)
   tracking.js        camera + body tracking (MediaPipe pose, 2 players)
   kids.js            players: names + faces, drawKidFace(), kidImg()
   kids.example.js    example for shared/private/kids.js
