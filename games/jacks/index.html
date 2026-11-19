@@ -1,0 +1,699 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Jumping Jack Spell</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Cinzel:wght@600;800&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; height: 100%; background: #0c0816; overflow: hidden;
+    font-family: "Cinzel", Georgia, serif; color: #fff; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; }
+  video { display: none; }
+  .overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 16px; background: rgba(12, 8, 22, .86); text-align: center; }
+  .hidden { display: none !important; }
+  h1 { font-family: "Cinzel Decorative", Georgia, serif; font-size: 60px; margin: 0; color: #f7c843;
+    text-shadow: 0 0 25px #ffb30088; }
+  #end { background: rgba(12, 8, 22, .55); gap: 10px; }
+  #end h1 { font-size: 44px; }
+  #trophy { display: flex; gap: 60px; }
+  .cup { position: relative; width: 170px; filter: drop-shadow(0 0 25px #ffd700);
+    animation: shine 1.2s ease-in-out infinite alternate; }
+  .cup svg { width: 170px; display: block; }
+  .cupface { position: absolute; left: 50%; top: 65px; transform: translate(-50%, -50%); }
+  .cupface img { width: 72px !important; height: 72px !important; }
+  @keyframes shine { from { transform: rotate(-4deg) scale(1); } to { transform: rotate(4deg) scale(1.07); } }
+  .row { display: flex; gap: 14px; align-items: center; font-size: 28px; }
+  .row span { width: 220px; text-align: right; }
+  button { font: inherit; font-size: 28px; padding: 12px 28px; border-radius: 40px; border: 3px solid #fff3;
+    background: #ffffff14; color: #fff; cursor: pointer; }
+  button.on { background: #f7c843; border-color: #f7c843; color: #2a1600; font-weight: 800; }
+  #start, .again { font-size: 40px; padding: 18px 60px; background: #7f0909; border-color: #f7c843;
+    color: #f7e7b0; font-weight: 800; }
+  .help { font-size: 22px; opacity: .8; max-width: 1000px; line-height: 1.5; }
+  #status { position: fixed; bottom: 20px; left: 0; right: 0; text-align: center; font-size: 26px; }
+  #result { font-size: 28px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="menu" class="overlay">
+  <h1>⭐ Jumping Jack Spell ⭐</h1>
+  <div class="row"><span>Players</span>
+    <button data-players="1">1 player</button><button data-players="2">2 players</button></div>
+  <div class="row" id="lvl0"><span id="lvl0name">Left player</span>
+    <button data-side="0" data-level="easy">Easy</button><button data-side="0" data-level="hard">Hard</button></div>
+  <div class="row" id="lvl1"><span>Right player</span>
+    <button data-side="1" data-level="easy">Easy</button><button data-side="1" data-level="hard">Hard</button></div>
+  <button id="home" onclick="location.href='../../'">🏠 All games</button>
+  <button id="start">Start ▶</button>
+  <div class="help">Do JUMPING JACKS to light up the dark Great Hall ✨ Arms UP + feet OUT, then DOWN + IN = 1 point.<br>
+    Easy: arms up and down is enough. Hard: on the beat = +1. Every 10 = LUMOS MAXIMA +5!<br>
+    Keys: Space start, Esc menu, F full screen, M music, C camera, H all games. Test: ↑ ↓ left player, W S right</div>
+</div>
+
+<div id="end" class="overlay hidden">
+  <h1 id="endTitle"></h1>
+  <div id="trophy"></div>
+  <div id="result"></div>
+  <button class="again">Play again ▶</button>
+  <button id="toMenu">Menu</button>
+</div>
+
+<div id="status"></div>
+
+<script type="module">
+import { video, startTracking, track as trackPoses } from '../../shared/tracking.js';
+import { KIDS, drawKidFace, kidImg } from '../../shared/kids.js';
+import { recStart, recStop, recCancel } from '../../shared/recorder.js';
+import { look, nextLook, drawCameraOver, setupLookMenu } from '../../shared/look.js';
+
+const $ = s => document.querySelector(s);
+const canvas = $('#c'), ctx = canvas.getContext('2d');
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+let W, H, S;
+const bg = document.createElement('canvas'), bgx = bg.getContext('2d');       // the Great Hall (painted once)
+const sky = document.createElement('canvas'), skx = sky.getContext('2d');     // bright ceiling stars for Lumos (painted once)
+function resize() {
+  const d = devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight; S = H / 900;
+  canvas.width = W * d; canvas.height = H * d; ctx.setTransform(d, 0, 0, d, 0, 0);
+  bg.width = W * d; bg.height = H * d; bgx.setTransform(d, 0, 0, d, 0, 0);
+  sky.width = W * d; sky.height = Math.ceil(H * .45 * d); skx.setTransform(d, 0, 0, d, 0, 0);
+  paintHall(); paintSky();
+  for (const z of zones) placeCandles(z);
+}
+
+// ---------- settings ----------
+// beat = seconds for one jumping jack in the rhythm helper (UP! on the first half, DOWN! on the second)
+const LEVELS = {
+  easy: { name: 'Easy', beat: 2.0, feet: false, onBeat: false },
+  hard: { name: 'Hard', beat: 1.3, feet: true, onBeat: true },
+};
+const ROUND = +new URLSearchParams(location.search).get('t') || 35; // ?t=10 = 10 second round
+const FACES = { easy: KIDS.player1, hard: KIDS.player2 };           // Easy = player 1, Hard = player 2
+const COLORS = ['#ff6b5b', '#6fb4ff'];                              // Gryffindor red, Ravenclaw blue
+const GOLD = '#ffd84a', LUMOS_EVERY = 10, LUMOS_BONUS = 5, LUMOS_T = 2.6, MAX_PARTS = 160;
+const settings = { players: 2, levels: ['easy', 'hard'] };
+
+const markLook = setupLookMenu(); // Camera Dim / Normal / Bright row in the menu (shared/look.js)
+function refreshMenu() {
+  document.querySelectorAll('[data-players]').forEach(b => b.classList.toggle('on', +b.dataset.players === settings.players));
+  document.querySelectorAll('[data-level]').forEach(b => b.classList.toggle('on', settings.levels[b.dataset.side] === b.dataset.level));
+  $('#lvl1').classList.toggle('hidden', settings.players === 1);
+  $('#lvl0name').textContent = settings.players === 1 ? 'Level' : 'Left player';
+}
+document.querySelectorAll('[data-players]').forEach(b => b.onclick = () => { settings.players = +b.dataset.players; refreshMenu(); });
+document.querySelectorAll('[data-level]').forEach(b => b.onclick = () => { settings.levels[b.dataset.side] = b.dataset.level; refreshMenu(); });
+refreshMenu();
+
+// ---------- sound ----------
+let ac, noise = null;
+function tone(type, f1, f2, dur, vol, delay = 0) {
+  const t = ac.currentTime + delay, o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.connect(g); g.connect(ac.destination);
+  o.frequency.setValueAtTime(f1, t); o.frequency.exponentialRampToValueAtTime(f2, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function whoosh(vol = 0.35, dur = 0.35, f1 = 400, f2 = 2400) { // wand swish: filtered noise that sweeps up
+  if (!noise) { // one second of noise, made once
+    noise = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+    const d = noise.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  }
+  const t = ac.currentTime, s = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
+  s.buffer = noise; f.type = 'bandpass'; f.Q.value = 1.2;
+  f.frequency.setValueAtTime(f1, t); f.frequency.exponentialRampToValueAtTime(f2, t + dur);
+  g.gain.setValueAtTime(0.001, t); g.gain.exponentialRampToValueAtTime(vol, t + dur * .3); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  s.connect(f); f.connect(g); g.connect(ac.destination); s.start(t); s.stop(t + dur + 0.02);
+}
+function sfx(kind, n = 0) {
+  if (!ac) return;
+  if (kind === 'rep') { whoosh(); [1319, 1760].forEach((f, i) => tone('sine', f + n * 40, f + n * 40, 0.3, 0.16, 0.08 + i * 0.06)); }
+  if (kind === 'beat') [1568, 1976, 2349].forEach((f, i) => tone('sine', f, f, 0.2, 0.14, 0.18 + i * 0.05));
+  if (kind === 'tick') tone('sine', n ? 1400 : 1000, n ? 1400 : 1000, 0.05, 0.035);
+  if (kind === 'lumos') {
+    whoosh(0.5, 0.9, 200, 5000);
+    [523, 659, 784, 1047, 1319, 1568, 2093].forEach((f, i) => { tone('sine', f, f, 0.6, 0.18, i * 0.07); tone('triangle', f / 2, f / 2, 0.5, 0.08, i * 0.07); });
+  }
+  if (kind === 'beep') tone('square', 600, 600, 0.12, 0.15);
+  if (kind === 'go') tone('square', 900, 900, 0.3, 0.15);
+  if (kind === 'end') // trumpet fanfare
+    [[523, 0, .15], [523, .18, .15], [523, .36, .15], [698, .54, .35], [880, .92, .2], [784, 1.12, .2], [1047, 1.32, .9]]
+      .forEach(([f, d, len]) => { tone('sawtooth', f, f, len, 0.12, d); tone('triangle', f, f, len, 0.25, d); });
+}
+
+// ---------- background music (made by code: a magic waltz in E minor, 3 beats per bar) ----------
+const MELODY = [76, 79, 83,  84, 83, 79,  81, 76, 72,  75, 78, 71,
+                83, 79, 76,  79, 84, 88,  84, 81, 76,  78, 75, 71];
+const ROOTS = [40, 36, 45, 47], STEP = 60 / 150;
+let musicOn = true, musicTimer = null, musicStep = 0, nextNote = 0, musicGain = null;
+const midi = m => 440 * 2 ** ((m - 69) / 12);
+function note(freq, t, dur, type, vol) {
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.frequency.value = freq; o.connect(g); g.connect(musicGain);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function playStep(i, t) {
+  const m = MELODY[i % 24], beat = i % 3, root = ROOTS[Math.floor(i / 3) % 4];
+  note(midi(m), t, 1.0, 'sine', 0.45); note(midi(m + 12), t, 0.35, 'sine', 0.15);
+  if (beat === 0) note(midi(root), t, STEP * 2.5, 'triangle', 0.6);
+  else note(midi(root + 12 + (beat === 1 ? 7 : 12)), t, STEP * 0.8, 'triangle', 0.25);
+}
+// Real music files from Iker (shared/music/, not in git). If a file can't play, the code waltz plays instead.
+const gameSong = new Audio('../../shared/music/game.mp3'), winnerSong = new Audio('../../shared/music/winner.mp3');
+gameSong.loop = true; gameSong.volume = 0.4; winnerSong.volume = 0.7;
+let winnerTimer = null;
+function startMusic() {
+  if (!musicOn) return;
+  stopWinnerSong();
+  gameSong.currentTime = 0;
+  gameSong.play().catch(startSynth);
+}
+function stopMusic() { gameSong.pause(); stopSynth(); }
+function playWinnerSong() {
+  if (!musicOn) return;
+  winnerTimer = setTimeout(() => { winnerSong.currentTime = 0; winnerSong.play().catch(() => {}); }, 2200);
+}
+function stopWinnerSong() { clearTimeout(winnerTimer); winnerSong.pause(); }
+function startSynth() {
+  if (!ac || !musicOn || musicTimer) return;
+  musicGain = ac.createGain(); musicGain.gain.value = 0.096; musicGain.connect(ac.destination);
+  musicStep = 0; nextNote = ac.currentTime + 0.05;
+  musicTimer = setInterval(() => {
+    while (nextNote < ac.currentTime + 0.12) { playStep(musicStep++, nextNote); nextNote += STEP; }
+  }, 25);
+}
+function stopSynth() {
+  if (!musicTimer) return;
+  clearInterval(musicTimer); musicTimer = null;
+  musicGain.gain.setTargetAtTime(0, ac.currentTime, 0.1);
+}
+
+// ---------- camera + body tracking ----------
+let poses = [];
+const status = t => $('#status').textContent = t;
+const sx = lm => (1 - lm.x) * W; // camera is mirrored
+
+// ---------- game state ----------
+let state = 'menu', timeLeft = 0, countdown = 0, zones = [], particles = [], texts = [], skyGlow = 0;
+
+function makeZones() {
+  zones = [];
+  for (let i = 0; i < settings.players; i++) {
+    const z = { i, level: LEVELS[settings.levels[i]], face: FACES[settings.levels[i]], color: COLORS[i],
+      score: 0, reps: 0, bonus: 0, beats: 0, lumosN: 0, lumos: 0, body: null, seenT: 9, fake: null,
+      phase: 'closed', open: false, beatT: 0, lastHalf: -1, pop: 0, bump: 0, wandX: 0, wandY: 0, candles: [] };
+    zones.push(z); placeCandles(z);
+  }
+}
+const zoneX = z => { const w = W / zones.length; return [z.i * w, (z.i + 1) * w]; };
+
+// her floating candles: a few rows under the enchanted ceiling, in her half
+function placeCandles(z) {
+  const [x0, x1] = zoneX(z), n = zones.length === 1 ? 20 : 12, cols = n / 2;
+  let s = 7 + z.i * 31; const r = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
+  z.candles = Array.from({ length: n }, (_, k) => {
+    const row = k % 2, col = Math.floor(k / 2);
+    return { x: x0 + (x1 - x0) * (col + .5 + (r() - .5) * .5) / cols, y: (300 + row * 70 + r() * 40) * S,
+      p: r() * 6.28, s: .8 + r() * .35, lit: 0 };
+  });
+}
+
+// ---------- reading the bodies ----------
+// A pretend body for the test keys: arms down + feet together, or arms up + feet apart.
+// Units: 0,0 = middle of the hips, 1 = hips-to-shoulders length, y goes down.
+const FIG_CLOSED = { 0: [0, -1.45], 11: [-.35, -1], 12: [.35, -1], 13: [-.45, -.55], 14: [.45, -.55], 15: [-.5, -.1], 16: [.5, -.1],
+  23: [-.2, 0], 24: [.2, 0], 25: [-.2, .75], 26: [.2, .75], 27: [-.2, 1.5], 28: [.2, 1.5] };
+const FIG_OPEN = { ...FIG_CLOSED, 13: [-.75, -1.5], 14: [.75, -1.5], 15: [-.85, -2.05], 16: [.85, -2.05],
+  25: [-.45, .72], 26: [.45, .72], 27: [-.72, 1.42], 28: [.72, 1.42] };
+const NEAR = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0, 10: 0, 17: 15, 19: 15, 21: 15, 18: 16, 20: 16, 22: 16, 29: 27, 31: 27, 30: 28, 32: 28 };
+function fakeBody(z, open) {
+  const [x0, x1] = zoneX(z), u = 0.17 * H, cx = (x0 + x1) / 2, cy = 0.6 * H, f = open ? FIG_OPEN : FIG_CLOSED;
+  return Array.from({ length: 33 }, (_, i) => {
+    const [fx, fy] = f[i] || f[NEAR[i]];
+    return { x: 1 - (cx + fx * u) / W, y: (cy + fy * u) / H, visibility: 0.99 };
+  });
+}
+
+// Each body goes to the half where its nose is (the biggest body wins).
+function readBodies(dt) {
+  const found = zones.map(() => null);
+  for (const p of poses) {
+    if (!p[0] || !p[11] || !p[12]) continue;
+    const zi = zones.length === 1 ? 0 : (sx(p[0]) < W / 2 ? 0 : 1);
+    const width = Math.abs(p[11].x - p[12].x);
+    if (!found[zi] || width > found[zi].width) found[zi] = { p, width };
+  }
+  zones.forEach((z, i) => {
+    let p = found[i]?.p;
+    if (z.fakeQ?.length) z.fake = { open: z.fakeQ.shift(), until: performance.now() + 1500 };
+    if (z.fake && z.fake.until > performance.now()) p = fakeBody(z, z.fake.open); else z.fake = null;
+    if (!p) { z.seenT += dt; if (z.seenT > 0.4) { z.body = null; z.open = false; } return; }
+    z.seenT = 0;
+    z.body = readBody(p);
+  });
+}
+function readBody(p) {
+  const ok = i => p[i] && (p[i].visibility ?? 1) > 0.35;
+  const x = i => sx(p[i]), y = i => p[i].y * H;
+  const sw = Math.abs(x(11) - x(12)), shY = (y(11) + y(12)) / 2;
+  const hipSeen = ok(23) && ok(24);
+  const T = hipSeen ? Math.max(sw * 0.8, (y(23) + y(24)) / 2 - shY) : sw * 1.3; // torso length in pixels
+  return { p, ok, x, y, sw, shY, T, hipSeen, hipW: hipSeen ? Math.abs(x(23) - x(24)) : sw * .6,
+    nose: y(0), noseX: x(0), feetSeen: ok(27) && ok(28) };
+}
+
+// OPEN / CLOSED checks. Forgiving on purpose: between the two nothing changes.
+function armsUp(b) {
+  const v = [15, 16].filter(b.ok);
+  if (!v.length) return false;
+  if (v.length === 1) return b.y(v[0]) < b.nose; // one hand hidden: the other one must be over her head
+  return v.every(i => b.y(i) < b.shY - .1 * b.T);
+}
+function armsDown(b) {
+  const v = [15, 16].filter(b.ok);
+  return v.length > 0 && v.every(i => b.y(i) > b.shY + .25 * b.T);
+}
+const feetGap = b => Math.abs(b.x(27) - b.x(28));
+const feetApart = b => feetGap(b) > Math.max(1.7 * b.hipW, 1.0 * b.sw);
+const feetTogether = b => feetGap(b) < Math.max(1.3 * b.hipW, .8 * b.sw);
+// Hard needs the feet too. If the camera cannot see her feet, the arms are enough (better than nothing counting).
+const isOpen = (z, b) => armsUp(b) && (!z.level.feet || !b.feetSeen || feetApart(b));
+const isClosed = (z, b) => armsDown(b) && (!z.level.feet || !b.feetSeen || feetTogether(b));
+
+// ---------- scoring ----------
+function burst(x, y, col, n, sp = 1) {
+  n = Math.min(n, MAX_PARTS - particles.length);
+  for (let k = 0; k < n; k++) {
+    const a = rand(0, 6.28), v = rand(120, 380) * S * sp;
+    particles.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 120 * S, life: rand(.5, .8), col, r: rand(2.5, 6) });
+  }
+}
+function didRep(z) {
+  z.reps++; z.score++; z.pop = 1;
+  const c = z.candles[(z.reps - 1) % z.candles.length]; c.lit = Math.max(c.lit, 0.01); c.flash = 1;
+  // on the beat? (Hard only): she lands close to a DOWN cue
+  const half = z.level.beat / 2, pos = z.beatT / half, odd = 2 * Math.round((pos - 1) / 2) + 1;
+  const onBeat = z.level.onBeat && Math.abs(pos - odd) * half < 0.25;
+  if (onBeat) { z.score++; z.beats++; }
+  sfx('rep', z.reps % 8); if (onBeat) sfx('beat');
+  const b = z.body, [x0, x1] = zoneX(z);
+  if (b) for (const i of [15, 16]) if (b.ok(i)) burst(b.x(i), b.y(i), Math.random() < .5 ? '#fff1b0' : z.color, 9);
+  burst(c.x, c.y - 14 * S, GOLD, 8, .5);
+  const tx = b && b.ok(16) ? b.x(16) : (x0 + x1) / 2, ty = b && b.ok(16) ? b.y(16) - 50 * S : H * .5;
+  texts.push({ x: tx, y: ty, t: onBeat ? '+2' : '+1', sub: onBeat ? 'On the beat!' : '', life: .9, col: onBeat ? '#9dffb0' : GOLD });
+  if (z.reps % LUMOS_EVERY === 0) lumos(z);
+}
+function lumos(z) { // LUMOS MAXIMA: the ceiling fills with stars, the banners glow, +5
+  z.score += LUMOS_BONUS; z.bonus += LUMOS_BONUS; z.lumosN++; z.lumos = LUMOS_T;
+  skyGlow = Math.max(skyGlow, 1);
+  sfx('lumos');
+  const [x0, x1] = zoneX(z), mx = (x0 + x1) / 2;
+  texts.push({ x: mx, y: H * .42, t: 'LUMOS MAXIMA!', sub: `+${LUMOS_BONUS} bonus ✨`, life: 2, col: '#fff6c8', big: 1 });
+  if (z.body && z.body.ok(16)) burst(z.body.x(16), z.body.y(16), '#fff', 24, 1.4);
+  for (const c of z.candles) c.flash = 1;
+}
+
+function startGame() {
+  if (!ac) ac = new AudioContext();
+  ac.resume();
+  recStart(canvas, ac, [gameSong, winnerSong]); // record this round (see shared/recorder.js)
+  stopMusic(); startMusic();
+  makeZones(); particles = []; texts = []; skyGlow = 0;
+  $('#menu').classList.add('hidden'); $('#end').classList.add('hidden');
+  state = 'count'; countdown = 3.99; lastBeep = 4;
+}
+let lastBeep = 4;
+
+function endGame() {
+  recStop();
+  state = 'end'; stopMusic(); sfx('end'); playWinnerSong();
+  const best = Math.max(...zones.map(z => z.score)), winners = zones.filter(z => z.score === best);
+  $('#endTitle').textContent = zones.length === 1 ? `${zones[0].face.name}, Light of the Great Hall!`
+    : winners.length === 2 ? 'A tie! Two champions!' : `${winners[0].face.name} wins the House Cup!`;
+  $('#trophy').innerHTML = winners.map(z => `<div class="cup">${CUP}<div class="cupface">${kidImg(z.face, '#fff6c8')}</div></div>`).join('');
+  $('#result').innerHTML = zones.map(z =>
+    `<span style="color:${z.color}">${kidImg(z.face, z.color)} ${z.face.name} (${z.level.name}): <b>${z.score}</b> point${z.score === 1 ? '' : 's'}` +
+    ` · ${z.reps} jumping jack${z.reps === 1 ? '' : 's'}${z.lumosN ? ` · ${z.lumosN}× Lumos` : ''}${z.beats ? ` · ${z.beats} on the beat` : ''}</span>`).join('<br>');
+  $('#end').classList.remove('hidden');
+}
+const CUP = `<svg viewBox="0 0 200 240"><defs><linearGradient id="gold" x1="0" x2="1">
+  <stop offset="0" stop-color="#8a5a00"/><stop offset=".35" stop-color="#fff1b0"/><stop offset=".6" stop-color="#f5c542"/>
+  <stop offset="1" stop-color="#8a5a00"/></linearGradient></defs>
+  <path d="M48 35 C5 35 5 105 62 112" fill="none" stroke="url(#gold)" stroke-width="12"/>
+  <path d="M152 35 C195 35 195 105 138 112" fill="none" stroke="url(#gold)" stroke-width="12"/>
+  <path d="M38 20 H162 C162 105 132 135 100 140 C68 135 38 105 38 20Z" fill="url(#gold)"/>
+  <rect x="90" y="138" width="20" height="38" fill="url(#gold)"/>
+  <path d="M62 176 H138 L150 202 H50Z" fill="url(#gold)"/>
+  <rect x="36" y="202" width="128" height="30" rx="5" fill="#7f0909" stroke="#f5c542" stroke-width="3"/>
+  <text x="100" y="223" text-anchor="middle" font-family="Cinzel, Georgia, serif" font-weight="800" font-size="17"
+    fill="#f7e7b0">⚡ CHAMPION ⚡</text></svg>`;
+function toMenu() {
+  recCancel();
+  state = 'menu'; zones = []; texts = []; particles = []; stopMusic(); stopWinnerSong();
+  $('#end').classList.add('hidden'); $('#menu').classList.remove('hidden');
+}
+
+$('#start').onclick = startGame;
+document.querySelector('.again').onclick = startGame;
+$('#toMenu').onclick = toMenu;
+addEventListener('keydown', e => {
+  if (e.repeat) return;
+  if (e.code === 'Space' && state !== 'play' && state !== 'count') startGame();
+  if (e.code === 'Escape') toMenu();
+  if (e.code === 'KeyH') location.href = '../../';
+  if (e.code === 'KeyC') { const l = nextLook(); markLook && markLook(); status('📷 Camera: ' + l.name); setTimeout(() => status(''), 1500); }
+  if (e.code === 'KeyM') { musicOn = !musicOn; if (musicOn && (state === 'play' || state === 'count')) startMusic(); else { stopMusic(); stopWinnerSong(); } }
+  if (e.code === 'KeyF') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+  // test keys: Up / Down = left player opens / closes, W / S = right player
+  if (!zones.length) return;
+  const k = { ArrowUp: [0, true], ArrowDown: [0, false], KeyW: [1, true], KeyS: [1, false] }[e.code];
+  if (!k) return;
+  e.preventDefault();
+  const z = zones[k[0]] || zones[0];
+  (z.fakeQ ||= []).push(k[1]); // queued, so fast key presses are never lost on a slow frame
+});
+
+// ---------- update ----------
+function update(dt) {
+  if (state === 'count') {
+    countdown -= dt;
+    const n = Math.ceil(countdown);
+    if (n < lastBeep) { lastBeep = n; sfx(n > 0 ? 'beep' : 'go'); }
+    if (countdown <= 0) { state = 'play'; timeLeft = ROUND; zones.forEach(z => { z.beatT = 0; z.lastHalf = -1; }); }
+  } else if (state === 'play') {
+    timeLeft -= dt;
+    if (timeLeft <= 0) { timeLeft = 0; endGame(); }
+  }
+  if (zones.length) readBodies(dt);
+
+  for (const z of zones) {
+    const b = z.body;
+    if (b) {
+      const op = isOpen(z, b), cl = isClosed(z, b);
+      if (op) z.open = true; else if (cl || !armsUp(b)) z.open = false;
+      // one jumping jack = CLOSED -> OPEN -> CLOSED
+      if (cl) { if (z.phase === 'open' && state === 'play') didRep(z); z.phase = 'closed'; }
+      else if (op && z.phase === 'closed') z.phase = 'open';
+      if (b.ok(16)) { z.wandX = b.x(16); z.wandY = b.y(16); }
+    }
+    if (state === 'play') { // rhythm helper: UP! / DOWN! with a soft tick
+      z.beatT += dt;
+      const h = Math.floor(z.beatT / (z.level.beat / 2));
+      if (h !== z.lastHalf) { z.lastHalf = h; sfx('tick', h % 2 ? 0 : 1); z.bump = 1; }
+    }
+    z.bump = Math.max(0, z.bump - dt * 3); z.pop = Math.max(0, z.pop - dt * 2.5);
+    z.lumos = Math.max(0, z.lumos - dt);
+    for (const c of z.candles) { if (c.lit > 0) c.lit = Math.min(1, c.lit + dt * 3); if (c.flash) c.flash = Math.max(0, c.flash - dt * 1.5); }
+  }
+  skyGlow = Math.max(0, skyGlow - dt / LUMOS_T);
+
+  if (state === 'end' && Math.random() < 0.5 && particles.length < MAX_PARTS) // golden confetti for the champion
+    particles.push({ x: rand(0, W), y: -10, vx: rand(-40, 40) * S, vy: rand(50, 150) * S, life: 3,
+      col: ['#f7c843', '#fff1b0', '#ff6b5b', '#6fb4ff', '#ffffff'][Math.floor(rand(0, 5))], r: rand(3, 7), g: 20 });
+  for (const p of particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += (p.g ?? 500) * S * dt; p.life -= dt; }
+  particles = particles.filter(p => p.life > 0);
+  for (const t of texts) { t.y -= (t.big ? 15 : 60) * S * dt; t.life -= dt; }
+  texts = texts.filter(t => t.life > 0);
+}
+
+// ---------- the Great Hall (painted once into hidden canvases) ----------
+let seed = 1;
+const srand = (a, b) => { seed = (seed * 16807) % 2147483647; return a + (seed / 2147483647) * (b - a); };
+// the four house banners: x (part of the width), cloth, trim
+const BANNERS = [[.12, '#9c1a1a', '#f2c14e'], [.37, '#e0b020', '#2a2a2a'], [.63, '#1f6b3a', '#c0c0c0'], [.88, '#1c3f8f', '#c9b27c']];
+function hangBanner(c, x, y, w, h, main, trim) {
+  c.fillStyle = main; c.strokeStyle = trim; c.lineWidth = 3 * S;
+  c.beginPath(); c.moveTo(x - w / 2, y); c.lineTo(x - w / 2, y + h); c.lineTo(x, y + h + w * .45); c.lineTo(x + w / 2, y + h);
+  c.lineTo(x + w / 2, y); c.closePath(); c.fill(); c.stroke();
+  c.fillStyle = trim;
+  c.fillRect(x - w * .65, y - 5 * S, w * 1.3, 8 * S);
+  const my = y + h * .45; // crest
+  c.beginPath(); c.moveTo(x, my - w * .3); c.lineTo(x + w * .26, my); c.lineTo(x, my + w * .32); c.lineTo(x - w * .26, my); c.closePath(); c.fill();
+}
+function paintHall() {
+  const c = bgx; seed = 11;
+  c.clearRect(0, 0, W, H);
+  // enchanted ceiling: a night sky at the top, see-through lower down so the camera shows
+  const g0 = c.createLinearGradient(0, 0, 0, H);
+  g0.addColorStop(0, 'rgba(10,8,34,.95)'); g0.addColorStop(.3, 'rgba(24,14,52,.72)');
+  g0.addColorStop(.55, 'rgba(26,16,36,.35)'); g0.addColorStop(1, 'rgba(22,12,8,.55)');
+  c.fillStyle = g0; c.fillRect(0, 0, W, H);
+  c.fillStyle = '#fff'; // a few faint stars (Lumos brings many more)
+  for (let k = 0; k < 50; k++) {
+    c.globalAlpha = srand(.15, .5);
+    c.beginPath(); c.arc(srand(0, W), srand(0, .3) * H, srand(.6, 1.5) * S, 0, 7); c.fill();
+  }
+  c.globalAlpha = 1;
+  // stone walls at the sides, with tall arched windows
+  for (const side of [0, 1]) {
+    const w = 0.07 * W, x = side ? W - w : 0;
+    const g = c.createLinearGradient(x, 0, x + w, 0);
+    g.addColorStop(side ? 1 : 0, 'rgba(38,30,34,.95)'); g.addColorStop(side ? 0 : 1, 'rgba(38,30,34,0)');
+    c.fillStyle = g; c.fillRect(x, 0, w, H);
+    c.strokeStyle = 'rgba(0,0,0,.25)'; c.lineWidth = 2 * S;
+    for (let y = 0; y < H; y += 34 * S) { c.beginPath(); c.moveTo(x, y); c.lineTo(x + w * .7, y); c.stroke(); }
+    const wx = side ? W - w * .55 : w * .55, wy = H * .3, ww = w * .32, wh = H * .3;
+    c.fillStyle = 'rgba(120,150,220,.3)';
+    c.beginPath(); c.moveTo(wx - ww / 2, wy + wh); c.lineTo(wx - ww / 2, wy); c.arc(wx, wy, ww / 2, Math.PI, 0); c.lineTo(wx + ww / 2, wy + wh); c.fill();
+  }
+  // the four house banners
+  for (const [fx, main, trim] of BANNERS) hangBanner(c, fx * W, 0, 62 * S, 190 * S, main, trim);
+  // long tables, coming toward us at the bottom, with plates and goblets
+  const vy = H * .62, vx = W / 2;
+  for (const f of [-.75, -.27, .27, .75]) {
+    const bx = vx + f * W * .62, w = 60 * S;
+    c.fillStyle = 'rgba(70,40,18,.55)';
+    c.beginPath(); c.moveTo(vx + f * W * .1 - 6 * S, vy + 80 * S); c.lineTo(vx + f * W * .1 + 6 * S, vy + 80 * S);
+    c.lineTo(bx + w, H); c.lineTo(bx - w, H); c.fill();
+    c.fillStyle = 'rgba(255,215,120,.5)';
+    for (let k = 0; k < 5; k++) {
+      const t = (k + .5) / 5, px = vx + f * W * .1 + (bx - vx - f * W * .1) * t, py = vy + 80 * S + (H - vy - 80 * S) * t;
+      c.beginPath(); c.ellipse(px, py, 4 * S + 8 * S * t, 2 * S + 4 * S * t, 0, 0, 7); c.fill();
+    }
+  }
+}
+function paintSky() { // the ceiling full of bright stars, shown when someone casts Lumos
+  const c = skx, h = H * .45; seed = 77;
+  c.clearRect(0, 0, W, h);
+  const g = c.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, 'rgba(90,110,220,.35)'); g.addColorStop(.6, 'rgba(160,120,255,.12)'); g.addColorStop(1, 'rgba(160,120,255,0)');
+  c.fillStyle = g; c.fillRect(0, 0, W, h);
+  c.fillStyle = '#fff';
+  for (let k = 0; k < 170; k++) {
+    c.globalAlpha = srand(.4, 1);
+    c.beginPath(); c.arc(srand(0, W), srand(0, h * .9), srand(.8, 2.4) * S, 0, 7); c.fill();
+  }
+  c.globalAlpha = 1; c.strokeStyle = '#fff8dc'; c.lineWidth = 1.5 * S; // a few big twinkles
+  for (let k = 0; k < 14; k++) {
+    const x = srand(0, W), y = srand(0, h * .8), r = srand(6, 12) * S;
+    c.beginPath(); c.moveTo(x - r, y); c.lineTo(x + r, y); c.moveTo(x, y - r); c.lineTo(x, y + r); c.stroke();
+  }
+}
+
+// glow pictures, made once (cheap to draw, no shadow blur)
+function makeGlow(size, stops) {
+  const c = document.createElement('canvas'); c.width = c.height = size;
+  const g = c.getContext('2d'), r = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  stops.forEach(([o, col]) => r.addColorStop(o, col)); g.fillStyle = r; g.fillRect(0, 0, size, size);
+  return c;
+}
+const candleGlow = makeGlow(64, [[0, 'rgba(255,220,130,.8)'], [.4, 'rgba(255,170,60,.25)'], [1, 'rgba(255,150,50,0)']]);
+const bigGlow = makeGlow(128, [[0, 'rgba(255,230,150,.9)'], [.35, 'rgba(255,200,90,.35)'], [1, 'rgba(255,180,60,0)']]);
+const wandGlow = makeGlow(64, [[0, 'rgba(255,255,240,.95)'], [.3, 'rgba(255,240,180,.4)'], [1, 'rgba(255,230,150,0)']]);
+const bodyGlow = {}; // a soft colored light behind each player, by color
+const glowOf = col => bodyGlow[col] || (bodyGlow[col] = makeGlow(64, [[0, col + '66'], [1, col + '00']]));
+
+function drawCandles(z, t) {
+  for (const k of z.candles) {
+    const x = k.x, y = k.y + Math.sin(t * .9 + k.p) * 7 * S, s = k.s * S;
+    if (k.lit > 0) {
+      const big = 1 + (k.flash || 0) * 1.2;
+      ctx.globalAlpha = k.lit; ctx.drawImage(candleGlow, x - 32 * s * big, y - 44 * s * big, 64 * s * big, 64 * s * big);
+      ctx.globalAlpha = 1;
+    }
+    ctx.fillStyle = k.lit > 0 ? '#f3ead2' : 'rgba(200,190,170,.45)'; ctx.fillRect(x - 5 * s, y - 6 * s, 10 * s, 34 * s);
+    if (k.lit > 0) {
+      ctx.fillStyle = '#ffd36b';
+      const fl = (1 + .15 * Math.sin(t * 13 + k.p * 3)) * k.lit;
+      ctx.beginPath(); ctx.ellipse(x, y - 13 * s, 3.5 * s, 7 * s * fl, 0, 0, 7); ctx.fill();
+    } else { ctx.fillStyle = 'rgba(40,30,20,.8)'; ctx.fillRect(x - 1 * s, y - 12 * s, 2 * s, 6 * s); } // cold wick
+  }
+}
+
+// her body as glowing lines: arms and legs turn gold when she is OPEN (two strokes, no shadow blur)
+const CORE = [[11, 12], [11, 23], [12, 24], [23, 24]];
+const LIMBS = [[11, 13], [13, 15], [12, 14], [14, 16], [23, 25], [25, 27], [24, 26], [26, 28]];
+function drawSkeleton(z) {
+  const b = z.body; if (!b) return;
+  const path = bones => { const p = new Path2D(); for (const [i, j] of bones) if (b.ok(i) && b.ok(j)) { p.moveTo(b.x(i), b.y(i)); p.lineTo(b.x(j), b.y(j)); } return p; };
+  const core = path(CORE), limbs = path(LIMBS), lc = z.open ? GOLD : z.color;
+  ctx.save(); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  if (b.hipSeen) { const r = b.T * 1.6; ctx.drawImage(glowOf(z.color), (b.x(11) + b.x(12)) / 2 - r, b.shY + b.T * .4 - r, r * 2, r * 2); }
+  ctx.globalAlpha = .28; ctx.lineWidth = 24 * S;
+  ctx.strokeStyle = z.color; ctx.stroke(core); ctx.strokeStyle = lc; ctx.stroke(limbs);
+  ctx.globalAlpha = .9; ctx.lineWidth = 6 * S;
+  ctx.strokeStyle = '#fff'; ctx.stroke(core); ctx.strokeStyle = z.open ? '#fff1b0' : '#fff'; ctx.stroke(limbs);
+  ctx.fillStyle = lc;
+  for (const i of [15, 27, 28]) if (b.ok(i)) { ctx.beginPath(); ctx.arc(b.x(i), b.y(i), 9 * S, 0, 7); ctx.fill(); }
+  ctx.restore();
+  // the wand in her right hand: a bright light at the tip
+  if (b.ok(16)) {
+    const r = (z.open ? 34 : 24) * S;
+    ctx.drawImage(wandGlow, b.x(16) - r, b.y(16) - r, r * 2, r * 2);
+  }
+  // her face on her head
+  if (b.ok(0)) {
+    const r = Math.max(26 * S, b.sw * .42);
+    if (!z.face.img.naturalWidth) drawFallbackFace(b.noseX, b.nose, r);
+    drawKidFace(ctx, z.face, b.noseX, b.nose, r, z.open ? GOLD : z.color);
+  }
+}
+function drawFallbackFace(x, y, r) {
+  ctx.fillStyle = '#f6d2b0'; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+  ctx.fillStyle = '#2a1a10';
+  ctx.beginPath(); ctx.arc(x - r * .33, y - r * .1, r * .1, 0, 7); ctx.arc(x + r * .33, y - r * .1, r * .1, 0, 7); ctx.fill();
+  ctx.strokeStyle = '#2a1a10'; ctx.lineWidth = r * .08;
+  ctx.beginPath(); ctx.arc(x, y + r * .15, r * .35, 0.3, Math.PI - 0.3); ctx.stroke();
+}
+function glowText(t, x, y, size, col, weight = 900, font = 'Cinzel Decorative') { // soft glow = a wide see-through outline
+  ctx.font = `${weight} ${size}px "${font}", Georgia, serif`;
+  ctx.lineJoin = 'round'; ctx.strokeStyle = col; ctx.globalAlpha = .3; ctx.lineWidth = size * .22; ctx.strokeText(t, x, y);
+  ctx.globalAlpha = 1; ctx.fillStyle = '#fff'; ctx.fillText(t, x, y);
+  ctx.lineWidth = Math.max(1.5, size * .04); ctx.strokeText(t, x, y);
+}
+
+function draw() {
+  const t = performance.now() / 1000;
+  ctx.fillStyle = '#0c0816'; ctx.fillRect(0, 0, W, H);
+  if (video.readyState >= 2) { // camera picture, mirrored, behind the hall
+    ctx.save(); ctx.globalAlpha = 0.45; ctx.translate(W, 0); ctx.scale(-1, 1);
+    ctx.drawImage(video, 0, 0, W, H); ctx.restore();
+  }
+  ctx.drawImage(bg, 0, 0, W, H);
+  // the dark: each half gets brighter with every jumping jack
+  const halves = zones.length ? zones : [null];
+  halves.forEach((z, i) => {
+    const w = W / halves.length, lit = z ? clamp(z.reps / 25, 0, 1) : .3;
+    ctx.fillStyle = `rgba(4,2,14,${(.6 * (1 - lit) * (z && z.lumos ? 1 - z.lumos / LUMOS_T : 1)).toFixed(3)})`;
+    ctx.fillRect(i * w, 0, w, H);
+  });
+  // the enchanted ceiling: stars stay a little after every Lumos, and blaze while it is cast
+  const lumosAll = zones.reduce((s, z) => s + z.lumosN, 0), skyA = clamp(Math.min(.55, lumosAll * .2) + skyGlow, 0, 1);
+  if (skyA > 0.01) {
+    ctx.globalAlpha = skyA * (.85 + .15 * Math.sin(t * 3)); ctx.drawImage(sky, 0, 0, W, H * .45); ctx.globalAlpha = 1;
+  }
+  // banners glow (added light) in the half of whoever cast Lumos
+  ctx.globalCompositeOperation = 'lighter';
+  for (const z of zones) {
+    const [x0, x1] = zoneX(z), a = Math.min(.35, z.lumosN * .15) + (z.lumos / LUMOS_T) * .8;
+    if (a < .01) continue;
+    ctx.globalAlpha = Math.min(1, a);
+    for (const [fx] of BANNERS) if (fx * W >= x0 && fx * W < x1) ctx.drawImage(bigGlow, fx * W - 90 * S, -40 * S, 180 * S, 300 * S);
+    if (z.lumos) { // a flash of white light over her half
+      const k = 1 - z.lumos / LUMOS_T; ctx.globalAlpha = .35 * (1 - k) * (1 - k);
+      ctx.fillStyle = '#fff6dc'; ctx.fillRect(x0, 0, x1 - x0, H);
+    }
+  }
+  ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+  for (const z of zones) drawCandles(z, t);
+  drawCameraOver(ctx, video, W, H); // Camera setting: kids clearer
+
+  if (zones.length === 2) {
+    ctx.strokeStyle = 'rgba(247,200,67,.4)'; ctx.lineWidth = 4; ctx.setLineDash([20, 16]);
+    ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  for (const z of zones) {
+    const [x0, x1] = zoneX(z), mx = (x0 + x1) / 2;
+    drawSkeleton(z);
+    if (z.lumos) { // the Lumos ring rises from her wand
+      const k = 1 - z.lumos / LUMOS_T;
+      ctx.save(); ctx.beginPath(); ctx.rect(x0, 0, x1 - x0, H); ctx.clip();
+      ctx.globalAlpha = 1 - k; ctx.strokeStyle = '#fff6dc'; ctx.lineWidth = 26 * S * (1 - k) + 3;
+      ctx.beginPath(); ctx.arc(z.wandX || mx, z.wandY || H * .5, k * H * 1.3, 0, 7); ctx.stroke(); ctx.restore();
+    }
+    // score + face
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.fillStyle = z.color; ctx.font = `800 ${70 * S * (1 + z.pop * .15)}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillText(z.score, mx + 40 * S, 18 * S);
+    drawFallbackFace(mx - 50 * S, 55 * S, 42 * S);
+    drawKidFace(ctx, z.face, mx - 50 * S, 55 * S, 42 * S, z.color);
+    ctx.font = `600 ${24 * S}px "Cinzel Decorative", Georgia, serif`; ctx.fillStyle = '#fff';
+    ctx.fillText(z.face.name + ' · ' + z.level.name, mx, 104 * S);
+    // counter
+    ctx.font = `800 ${28 * S}px "Cinzel", Georgia, serif`; ctx.fillStyle = GOLD;
+    ctx.fillText(`${z.reps} jumping jack${z.reps === 1 ? '' : 's'}!`, mx, 138 * S);
+    // power bar: 10 jumping jacks = Lumos Maxima
+    const mw = 200 * S, bx = mx - mw / 2, by = 178 * S, fill = (z.reps % LUMOS_EVERY) / LUMOS_EVERY;
+    ctx.fillStyle = 'rgba(0,0,0,.5)'; ctx.fillRect(bx, by, mw, 14 * S);
+    ctx.fillStyle = z.lumos ? '#fff' : GOLD; ctx.fillRect(bx, by, mw * (z.lumos ? 1 : fill), 14 * S);
+    ctx.strokeStyle = 'rgba(255,255,255,.7)'; ctx.lineWidth = 2; ctx.strokeRect(bx, by, mw, 14 * S);
+    ctx.font = `700 ${17 * S}px "Cinzel", Georgia, serif`; ctx.fillStyle = '#fff1b0';
+    ctx.fillText(`Lumos Maxima: ${LUMOS_EVERY - (z.reps % LUMOS_EVERY)} more`, mx, by + 20 * S);
+    // rhythm cue
+    if (state === 'play') {
+      const up = Math.floor(z.beatT / (z.level.beat / 2)) % 2 === 0;
+      ctx.save(); ctx.translate(mx, H - 130 * S); const k = 1 + z.bump * .18; ctx.scale(k, k);
+      ctx.textBaseline = 'middle';
+      glowText(up ? '⬆ UP!' : '⬇ DOWN!', 0, 0, 46 * S, up ? GOLD : z.color);
+      ctx.restore();
+    }
+    if (z.seenT > 1.5 && state !== 'end') {
+      ctx.font = `600 ${22 * S}px "Cinzel", Georgia, serif`; ctx.fillStyle = 'rgba(255,255,255,.75)'; ctx.textBaseline = 'top';
+      ctx.fillText('👀 Where are you? Step back!', mx, H * .55);
+    } else if (z.body && z.level.feet && !z.body.feetSeen && state === 'play') {
+      ctx.font = `600 ${20 * S}px "Cinzel", Georgia, serif`; ctx.fillStyle = 'rgba(255,255,255,.7)'; ctx.textBaseline = 'top';
+      ctx.fillText('Step back so I can see your feet', mx, 222 * S);
+    }
+  }
+
+  for (const p of particles) {
+    ctx.globalAlpha = Math.min(1, Math.max(0, p.life / 0.6)); ctx.fillStyle = p.col;
+    ctx.fillRect(p.x - p.r * S, p.y - p.r * S, p.r * 2 * S, p.r * 2 * S);
+  }
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const tx of texts) {
+    ctx.globalAlpha = Math.max(0, Math.min(1, tx.life / 0.5));
+    if (tx.big) glowText(tx.t, tx.x, tx.y, 64 * S * (zones.length === 2 ? .8 : 1), GOLD);
+    else { ctx.fillStyle = tx.col; ctx.font = `900 ${56 * S}px "Cinzel Decorative", Georgia, serif`; ctx.fillText(tx.t, tx.x, tx.y); }
+    if (tx.sub) { ctx.globalAlpha = Math.max(0, Math.min(1, tx.life / 0.5)); ctx.fillStyle = tx.col;
+      ctx.font = `800 ${28 * S}px "Cinzel", Georgia, serif`; ctx.fillText(tx.sub, tx.x, tx.y + (tx.big ? 58 : 44) * S); }
+  }
+  ctx.globalAlpha = 1;
+
+  ctx.fillStyle = '#fff';
+  if (state === 'play') {
+    ctx.font = `800 ${40 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillStyle = timeLeft < 10 ? '#ff6b6b' : '#fff';
+    ctx.fillText('⌛ ' + Math.ceil(timeLeft), W / 2, H - 36 * S);
+  }
+  if (state === 'count') {
+    const n = Math.ceil(countdown);
+    ctx.font = `900 ${220 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillText(n > 0 ? n : 'GO!', W / 2, H * 0.55);
+    ctx.font = `600 ${34 * S}px "Cinzel Decorative", Georgia, serif`;
+    ctx.fillText('Arms UP, feet OUT… then DOWN and IN!', W / 2, H * 0.55 + 150 * S);
+  }
+}
+
+// ---------- main loop ----------
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  poses = trackPoses(now); update(dt); draw();
+  requestAnimationFrame(loop);
+}
+addEventListener('resize', resize); resize();
+requestAnimationFrame(loop);
+startTracking(status);
+window.jacksTest = () => ({ state, timeLeft, zones: zones.map(z => ({ score: z.score, reps: z.reps, bonus: z.bonus, lumosN: z.lumosN, beats: z.beats, phase: z.phase, open: z.open })) });
+</script>
+</body>
+</html>

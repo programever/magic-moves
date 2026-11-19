@@ -18,9 +18,12 @@ games/<name>/        one folder per game (index.html + its own music/pictures)
   owls/              Hedwig Post: take letters from owls, put them in the box with the same color
   duel/              Wizard Duel: sisters duel; right hand flicks spells, left hand up = shield
   dino/              Forbidden Forest Run: jump over roots, duck under bats (2 players = top/bottom lanes)
+  run/               Run to Hogsmeade: run in place (knees up) to race from Hogwarts to Hogsmeade
+  jacks/             Jumping Jack Spell: jumping jacks light up the Great Hall, 10 = Lumos Maxima
 shared/              used by every game
   recorder.js        records the camera + microphone each round; end screen: Replay / Save video (else deleted)
   tracking.js        camera + body tracking (MediaPipe pose, 2 players)
+  look.js            Camera Dim/Normal/Bright setting (per game) + drawCameraOver()
   kids.js            players: names + faces, drawKidFace(), kidImg()
   kids.example.js    example for shared/private/kids.js
   lib/               MediaPipe library + model, downloaded so it works offline
